@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*$py.class
+temp/
+outputs/
+logs/
+jobs/
+live/
+bug/
+config/*.ini
+.vscode/
+.idea/
+New Text Document.txt

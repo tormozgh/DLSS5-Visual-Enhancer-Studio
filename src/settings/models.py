@@ -113,6 +113,18 @@ class UISettings:
     upscale_quality: str = "Auto (Default)"
     upscale_rename_mode: str = "Auto"
     upscale_custom_suffix: str = "_Upscale"
+    custom_output_dir: str = ""
+
+    def get_output_dir(self) -> Path:
+        from ..core.paths import OUTPUTS
+        if self.custom_output_dir:
+            try:
+                p = Path(self.custom_output_dir)
+                if p.is_dir():
+                    return p
+            except Exception:
+                pass
+        return OUTPUTS
 
     def component_values(
         self,

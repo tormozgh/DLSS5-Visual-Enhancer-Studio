@@ -15,7 +15,10 @@ from typing import Callable
 
 import av
 import numpy as np
-from av.codec.hwaccel import HWAccel
+try:
+    from av.codec.hwaccel import HWAccel
+except ImportError:
+    HWAccel = None
 
 from ...core import app_log, ffmpeg
 from ...core.gpu_selection import resolve_runtime_ai_gpu
@@ -308,7 +311,7 @@ def convert_video(
             # Final-residual stabilization needs the original RGBA frame after
             # composition.  Keep decode on the host for this non-NVENC path;
             # feature 18 and optical flow still execute on the selected GPU.
-            if options.nr_gpu_mode and float(options.shimmer_suppression) <= 0.0:
+            if HWAccel is not None and options.nr_gpu_mode and float(options.shimmer_suppression) <= 0.0:
                 # FFmpeg's CUDA hwdevice must be created before NGX retains the
                 # CUDA primary context on affected Windows driver versions.
                 decode_device = HWAccel(

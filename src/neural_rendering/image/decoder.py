@@ -9,15 +9,27 @@ from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
-import pillow_heif
-import rawpy
-import resvg_py
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except ImportError:
+    pillow_heif = None
+
+try:
+    import rawpy
+except ImportError:
+    rawpy = None
+
+try:
+    import resvg_py
+except ImportError:
+    resvg_py = None
+
 from PIL import Image, ImageCms, ImageOps
 
 from ...core.paths import GRADIO_TEMP
 from .models import RAW_EXTENSIONS
 
-pillow_heif.register_heif_opener()
 Image.MAX_IMAGE_PIXELS = 100_000_000
 
 # Formats modern Chromium-based Gradio clients can display without a display

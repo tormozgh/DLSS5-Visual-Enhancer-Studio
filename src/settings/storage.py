@@ -230,6 +230,7 @@ def load_settings(path: str | os.PathLike[str]) -> UISettings:
             UPSCALE_MODE_CHOICES,
             DEFAULT_SETTINGS.upscale_mode,
         ),
+        custom_output_dir=section.get("custom_output_dir", "").strip(),
     )
     # Auto-disable HDR Mode if codec does not support it (e.g. H.264)
     try:
@@ -313,6 +314,7 @@ def save_settings(path: str | os.PathLike[str], settings: UISettings) -> None:
         "frame_interpolation_custom_suffix": settings.frame_interpolation_custom_suffix,
         "preview_encoding": settings.preview_encoding,
         "full_size_image_previews": str(settings.full_size_image_previews).lower(),
+        "custom_output_dir": settings.custom_output_dir,
     }
 
     temporary = config_path.with_name(f".{config_path.name}.tmp")

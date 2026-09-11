@@ -17,7 +17,10 @@ from pathlib import Path
 
 import av
 import numpy as np
-from av.codec.hwaccel import HWAccel
+try:
+    from av.codec.hwaccel import HWAccel
+except ImportError:
+    HWAccel = None
 
 from ..core.gpu_selection import resolve_runtime_ai_gpu
 from ..core.jobs import BoundedLogBuffer, Cancelled, JobController, active_job, drain_bounded_text

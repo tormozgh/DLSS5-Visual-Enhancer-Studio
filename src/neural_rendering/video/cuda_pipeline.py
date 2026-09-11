@@ -14,7 +14,10 @@ from typing import Any, Callable
 
 import av
 import numpy as np
-from av.codec.hwaccel import HWAccel
+try:
+    from av.codec.hwaccel import HWAccel
+except ImportError:
+    HWAccel = None
 
 from ...core import app_log, ffmpeg
 from ...core.disk_paths import OutputFile, prepare_output_dir
