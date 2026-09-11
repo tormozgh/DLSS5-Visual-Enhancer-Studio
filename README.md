@@ -1,4 +1,5 @@
 # DLSS 5 Visual Enhancer — Windows Native Studio
+<img width="1916" height="1097" alt="dlss5ves" src="https://github.com/user-attachments/assets/01cb99b2-67a3-4e81-ab53-805d82f9fe4b" />
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2011-0078D4?style=flat-square&logo=windows11&logoColor=white)](https://github.com/tormozgh/dlss5-visual-enhancer/releases)
 [![NVIDIA](https://img.shields.io/badge/NVIDIA-RTX-76B900?style=flat-square&logo=nvidia&logoColor=white)](https://github.com/tormozgh/dlss5-visual-enhancer)
@@ -28,7 +29,7 @@ The original web UI relied on local browser rendering and round-trip server requ
 - **Interactive Dual Canvas Comparison:** Interactive draggable Split-View divider slider and synchronized Side-by-Side viewports with zoom, pan, 1:1 pixel view, and fit-to-canvas modes.
 - **Production Export Pipelines:** Full background video and image rendering for Neural Rendering, Upscale, and Frame Interpolation with live progress bars, cancellation support, and output file management.
 - **Customizable Output Directory:** Select custom storage paths for rendered media directly in Settings.
-- **Modern Minimalist Studio Aesthetics:** Neutral dark gray theme (DaVinci Resolve / Blender inspired) with clear typography and zero emojis.
+
 
 ---
 
