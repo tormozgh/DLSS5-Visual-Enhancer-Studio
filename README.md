@@ -68,7 +68,7 @@ The original web UI relied on local browser rendering and round-trip server requ
 ### Option 1: Standalone Portable Package (Recommended)
 
 1. Go to the [Releases](https://github.com/tormozgh/dlss5-visual-enhancer/releases) page.
-2. Download the latest `DLSS5-Visual-Enhancer-Studio-vX.X.X.zip` release archive.
+2. Download the latest `DLSS5-Visual-Enhancer-Studio-v1.0.0.zip` release archive.
 3. Extract the ZIP to your desired location (e.g. `D:\DLSS5-Studio`).
 4. Double-click **`start.bat`**. The native Windows Studio UI will launch immediately.
 
