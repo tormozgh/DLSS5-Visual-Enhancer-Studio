@@ -20,6 +20,7 @@ from .preview_engine import PreviewEngine
 from .tabs.about_tab import AboutTab
 from .tabs.frame_interpolation_tab import FrameInterpolationTab
 from .tabs.neural_rendering_tab import NeuralRenderingTab
+from .tabs.realtime_rendering_tab import RealtimeRenderingTab
 from .tabs.settings_tab import SettingsTab
 from .tabs.upscale_tab import UpscaleTab
 
@@ -74,11 +75,15 @@ class MainWindow(QMainWindow):
         self.tab_interpolation = FrameInterpolationTab(self._settings, self)
         self.tabs.addTab(self.tab_interpolation, "Frame Interpolation")
 
-        # Tab 4: Settings
+        # Tab 4: Real-Time Rendering
+        self.tab_realtime = RealtimeRenderingTab(self._settings, self)
+        self.tabs.addTab(self.tab_realtime, "Real-Time Rendering")
+
+        # Tab 5: Settings
         self.tab_settings = SettingsTab(self._settings, gpu_choices, self)
         self.tabs.addTab(self.tab_settings, "Settings")
 
-        # Tab 5: About
+        # Tab 6: About
         self.tab_about = AboutTab(self._gpu_name, self._driver, self)
         self.tabs.addTab(self.tab_about, "About")
 
@@ -96,6 +101,7 @@ class MainWindow(QMainWindow):
         self.tab_neural.latencyUpdated.connect(self.telemetry.set_timing)
         self.tab_upscale.statusMessage.connect(self.telemetry.set_status)
         self.tab_interpolation.statusMessage.connect(self.telemetry.set_status)
+        self.tab_realtime.statusMessage.connect(self.telemetry.set_status)
         self.tab_settings.settingsSaved.connect(self._on_settings_saved)
 
     def _on_settings_saved(self) -> None:
@@ -121,4 +127,5 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         """Shut down background threads and sessions gracefully."""
         self.preview_engine.shutdown()
+        self.tab_realtime.shutdown()
         event.accept()

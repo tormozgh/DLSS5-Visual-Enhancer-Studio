@@ -78,6 +78,14 @@ class AboutTab(QWidget):
         ui_credit.setOpenExternalLinks(True)
         c_layout.addWidget(ui_credit)
 
+        reshade_credit = QLabel(
+            "<b>ReShade Post-Processing Engine:</b> Developed by <b>crosire & ReShade contributors</b><br>"
+            "GitHub Repository: <a href='https://github.com/crosire/reshade' style='color: #7289da; text-decoration: none;'>https://github.com/crosire/reshade</a>"
+        )
+        reshade_credit.setStyleSheet("color: #e0e3ea; line-height: 1.6; font-size: 12px;")
+        reshade_credit.setOpenExternalLinks(True)
+        c_layout.addWidget(reshade_credit)
+
         left_col.addWidget(credits_card)
 
         # 2. License and Third-Party Notices Card
@@ -108,11 +116,13 @@ class AboutTab(QWidget):
             "<b>- FFmpeg:</b> FFmpeg and the bundled FFmpeg build retain their own copyright and license terms. Anyone redistributing the included binaries "
             "must preserve the applicable notices and satisfy the license and corresponding-source obligations of that build. See <a href='https://github.com/FFmpeg/FFmpeg/blob/master/LICENSE.md' style='color: #7289da; text-decoration: none;'>FFmpeg licensing</a>.<br><br>"
             "<b>- MPV and yt-dlp:</b> The bundled portable MPV player and yt-dlp resolver retain their own copyright and license terms; preserve the notices shipped with each distribution.<br><br>"
+            "<b>- ReShade:</b> ReShade post-processing suite and Add-on API are licensed under the BSD 3-Clause License, copyright &copy; crosire. See <a href='https://github.com/crosire/reshade/blob/main/LICENSE.md' style='color: #7289da; text-decoration: none;'>ReShade licensing</a>.<br><br>"
+            "<b>- NDI:</b> NDI&reg; (Network Device Interface) is a registered trademark of Vizrt NDI AB. Used under the NDI SDK License Agreement.<br><br>"
             "<b>- Python, PyQt6 and Packages:</b> Python is provided under the <a href='https://docs.python.org/3.13/license.html' style='color: #7289da; text-decoration: none;'>PSF License</a>. "
             "The portable Python runtime and packages including PyQt6, Pillow, pillow-heif, rawpy, resvg-py, PyAV, OpenCV, NumPy, their transitive dependencies, "
             "and bundled codecs retain their own copyright and license terms.<br><br>"
-            "<b>Trademarks:</b> NVIDIA, GeForce RTX, NGX, DLSS, and RTX Video are trademarks and/or registered trademarks of NVIDIA Corporation. "
-            "FFmpeg, MPV, yt-dlp, Python, PyQt6, and other names belong to their respective owners."
+            "<b>Trademarks:</b> NVIDIA, GeForce RTX, NGX, DLSS, Streamline, and RTX Video are trademarks and/or registered trademarks of NVIDIA Corporation. "
+            "ReShade, NDI, FFmpeg, MPV, yt-dlp, Python, PyQt6, and other names belong to their respective owners."
         )
         lic_details.setStyleSheet("color: #9aa0ac; line-height: 1.5; font-size: 11px;")
         lic_details.setWordWrap(True)
@@ -160,6 +170,7 @@ class AboutTab(QWidget):
         feat_title.setStyleSheet("color: #d0d4dc; font-weight: 700; font-size: 13px;")
         feat_text = QLabel(
             "- Neuroframe Engine: In-process Direct3D 12 / NGX neural rendering bridge.\n"
+            "- Real-Time Broadcast & Rendering: NDI 6 In/Out, NVIDIA Streamline 2.13 (DLSS-NR & DLSS-G), ReShade FX Shaders, and Instant NVENC Recording.\n"
             "- Professional Timeline Scrubber: Real-time frame seek, synchronized playback, and SMPTE timecode.\n"
             "- Dual Canvas Comparison: Draggable Split-Slider and Side-by-Side synchronized viewports.\n"
             "- RTX Video Super Resolution (VSR) & RTX Video HDR hardware processing.\n"

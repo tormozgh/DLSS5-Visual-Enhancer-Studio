@@ -5,9 +5,10 @@ temp/
 outputs/
 logs/
 jobs/
-live/
+/live/
 bug/
 config/*.ini
 .vscode/
 .idea/
 New Text Document.txt
+streamline/*.dll
