@@ -62,7 +62,7 @@ class PreviewParameters:
     automatic_mask: bool = False
     ai_gpu_uuid: str = "auto"
     nr_gpu_mode: bool = True
-    shimmer_suppression: float = 0.70
+    shimmer_suppression: float = 0.0
     codec: str = "H.264 (NVIDIA NVENC)"
     container: str = "MP4"
     quality: str = "Auto (Default)"

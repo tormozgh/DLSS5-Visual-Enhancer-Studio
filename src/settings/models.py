@@ -55,7 +55,7 @@ class UISettings:
     grain_preservation: float = 0.0
     # Video/Live temporal residual stabilization. Image rendering always
     # remains reset-based and does not consume this value.
-    shimmer_suppression: float = 0.70
+    shimmer_suppression: float = 0.0
     mask_feather: int = 0
     # Validated Gradio upload identity; intentionally omitted from config/presets.
     nr_mask: object | None = None

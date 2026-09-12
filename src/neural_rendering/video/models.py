@@ -19,7 +19,7 @@ class ConversionOptions:
     tone_preservation: float = 0.0
     face_skin_protection: float = 0.0
     grain_preservation: float = 0.0
-    shimmer_suppression: float = 0.70
+    shimmer_suppression: float = 0.0
     mask_feather: int = 0
     nr_mask: object | None = None
     upscaling_factor: float = 1.0

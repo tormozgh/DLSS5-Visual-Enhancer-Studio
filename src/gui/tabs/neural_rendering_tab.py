@@ -347,6 +347,7 @@ class NeuralRenderingTab(QWidget):
 
         # Shimmer Suppression
         self.slider_shimmer = LabeledSlider("Shimmer Suppression", 0.0, 1.0, self._settings.shimmer_suppression, step=0.05)
+        self.slider_shimmer.setToolTip("Temporal residual stabilizer. Keep at 0.0 for clean motion without ghosting; increase only for static shots with high-frequency shimmering.")
         self.slider_shimmer.valueChanged.connect(self._trigger_preview)
         layout.addWidget(self.slider_shimmer)
 
@@ -573,7 +574,7 @@ class NeuralRenderingTab(QWidget):
         self.chk_auto_mask.setChecked(False)
         self.combo_style.setCurrentText("Default")
         self.combo_scale.setCurrentIndex(0)
-        self.slider_shimmer.setValue(0.70)
+        self.slider_shimmer.setValue(0.0)
         self._trigger_preview()
 
     def _preset_detail_only(self) -> None:

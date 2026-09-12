@@ -63,7 +63,7 @@ class AboutTab(QWidget):
         c_layout.addWidget(credits_title)
 
         core_credit = QLabel(
-            "<b>Original Project:</b> Developed by <b>Merserk</b><br>"
+            "<b>Original Core Engine:</b> Developed by <b>Merserk</b><br>"
             "GitHub Repository: <a href='https://github.com/Merserk/dlss5-visual-enhancer' style='color: #7289da; text-decoration: none;'>https://github.com/Merserk/dlss5-visual-enhancer</a>"
         )
         core_credit.setStyleSheet("color: #e0e3ea; line-height: 1.6; font-size: 12px;")
@@ -71,7 +71,7 @@ class AboutTab(QWidget):
         c_layout.addWidget(core_credit)
 
         ui_credit = QLabel(
-            "<b>Windows Native Studio Desktop UI:</b> Developed by <b>tormozgh</b><br>"
+            "<b>Desktop Studio:</b> Developed by <b>tormozgh</b><br>"
             "GitHub Profile: <a href='https://github.com/tormozgh' style='color: #7289da; text-decoration: none;'>https://github.com/tormozgh</a>"
         )
         ui_credit.setStyleSheet("color: #e0e3ea; line-height: 1.6; font-size: 12px;")

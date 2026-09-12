@@ -29,7 +29,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("DLSS 5 Visual Enhancer — NVIDIA RTX Studio")
+        self.setWindowTitle("DLSS 5 Visual Enhancer Studio")
         self.resize(1440, 920)
         self.setMinimumSize(1100, 720)
         self.setAcceptDrops(True)
