@@ -1,4 +1,4 @@
-# DLSS 5 Visual Enhancer — Windows Native Studio
+# DLSS 5 Visual Enhancer Studio
 <img width="1916" height="1097" alt="dlss5ves" src="https://github.com/user-attachments/assets/01cb99b2-67a3-4e81-ab53-805d82f9fe4b" />
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2011-0078D4?style=flat-square&logo=windows11&logoColor=white)](https://github.com/tormozgh/dlss5-visual-enhancer/releases)
@@ -7,7 +7,7 @@
 [![UI](https://img.shields.io/badge/UI-PyQt6%20Native%20Studio-5c6ac4?style=flat-square)](https://github.com/tormozgh/dlss5-visual-enhancer)
 [![License](https://img.shields.io/badge/License-MIT-gray?style=flat-square)](LICENSE)
 
-A standalone, high-performance Windows Native Desktop Studio application (built with PyQt6 and Direct3D 12) for real-time **NVIDIA DLSS 5 Neural Rendering**, **RTX Video Super Resolution (VSR)**, **RTX Video HDR**, and **DLSS Frame Generation (DLSSG)**.
+A standalone, high-performance Windows Desktop application (built with PyQt6 and Direct3D 12) for real-time **NVIDIA DLSS 5 Neural Rendering**, **RTX Video Super Resolution (VSR)**, **RTX Video HDR**, and **DLSS Frame Generation (DLSSG)**.
 
 This native studio suite replaces browser-based interfaces with an ultra-responsive, zero-latency desktop workflow engineered for creative artists, video editors, and AI visual enthusiasts.
 
@@ -15,8 +15,8 @@ This native studio suite replaces browser-based interfaces with an ultra-respons
 
 ## Authorship & Credits
 
-- **Windows Native Studio Desktop UI:** Developed by [tormozgh](https://github.com/tormozgh)
-- **Original Project & Core Neural Engine:** Developed by [Merserk](https://github.com/Merserk/dlss5-visual-enhancer)
+- **Original Core Engine:** Developed by [Merserk](https://github.com/Merserk/dlss5-visual-enhancer)
+- **Desktop Studio:** Developed by [tormozgh](https://github.com/tormozgh)
 
 ---
 
