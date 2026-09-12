@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
@@ -29,6 +31,7 @@ from ...core.ffmpeg import CODEC_CHOICES, ENCODING_QUALITIES
 from ...core.paths import OUTPUTS
 from ...neural_rendering.video.models import ConversionOptions
 from ...settings.models import CONTAINER_CHOICES, UISettings
+from ...settings.presets import import_settings_preset, preset_document
 from ..components.sliders import LabeledSlider
 from ..components.split_canvas import CanvasViewMode, SplitCanvas
 from ..components.timeline import VideoTimelineBar
@@ -229,10 +232,13 @@ class NeuralRenderingTab(QWidget):
         self.controls_layout.addWidget(card)
 
     def _build_presets_card(self) -> None:
-        card = QGroupBox("Presets")
-        layout = QHBoxLayout(card)
-        layout.setSpacing(6)
+        card = QGroupBox("Presets & Settings")
+        layout = QVBoxLayout(card)
+        layout.setSpacing(8)
 
+        # Quick preset buttons row
+        row_quick = QHBoxLayout()
+        row_quick.setSpacing(6)
         self.btn_preset_default = QPushButton("Default")
         self.btn_preset_default.clicked.connect(self._preset_default)
 
@@ -243,9 +249,28 @@ class NeuralRenderingTab(QWidget):
         self.btn_reset_all = QPushButton("Reset All")
         self.btn_reset_all.clicked.connect(self._reset_all)
 
-        layout.addWidget(self.btn_preset_default)
-        layout.addWidget(self.btn_preset_detail)
-        layout.addWidget(self.btn_reset_all)
+        row_quick.addWidget(self.btn_preset_default)
+        row_quick.addWidget(self.btn_preset_detail)
+        row_quick.addWidget(self.btn_reset_all)
+        layout.addLayout(row_quick)
+
+        # Save and Load Settings row
+        row_save_load = QHBoxLayout()
+        row_save_load.setSpacing(6)
+        self.btn_save_settings = QPushButton("Save Settings...")
+        self.btn_save_settings.setProperty("class", "mini-btn")
+        self.btn_save_settings.setToolTip("Save current neural rendering parameters to a preset file")
+        self.btn_save_settings.clicked.connect(self._on_save_settings)
+
+        self.btn_load_settings = QPushButton("Load Settings...")
+        self.btn_load_settings.setProperty("class", "mini-btn")
+        self.btn_load_settings.setToolTip("Load and apply saved neural rendering parameters from a preset file")
+        self.btn_load_settings.clicked.connect(self._on_load_settings)
+
+        row_save_load.addWidget(self.btn_save_settings)
+        row_save_load.addWidget(self.btn_load_settings)
+        layout.addLayout(row_save_load)
+
         self.controls_layout.addWidget(card)
 
     def _build_dlss_core_card(self) -> None:
@@ -585,6 +610,102 @@ class NeuralRenderingTab(QWidget):
     def _reset_all(self) -> None:
         self._preset_default()
 
+    def get_current_settings(self) -> UISettings:
+        scale_factor = float(self.combo_scale.currentData() or 1.0)
+        return replace(
+            self._settings,
+            nr_style=self.combo_style.currentText(),
+            nr_intensity=self.slider_intensity.value(),
+            nr_passes=int(round(self.slider_passes.value())),
+            local_tone_strength=self.slider_tone.value(),
+            local_structure_strength=self.slider_structure.value(),
+            skin_structure_strength=self.slider_skin.value(),
+            nr_color_strength=self.slider_color_strength.value(),
+            tone_preservation=self.slider_tone_preservation.value(),
+            face_skin_protection=self.slider_face_protection.value(),
+            grain_preservation=self.slider_grain.value(),
+            shimmer_suppression=self.slider_shimmer.value(),
+            mask_feather=int(round(self.slider_feather.value())),
+            automatic_mask=self.chk_auto_mask.isChecked(),
+            upscaling_factor=scale_factor,
+            codec=self.combo_codec.currentText(),
+            container=self.combo_container.currentText(),
+            hdr_mode=self.chk_hdr.isChecked(),
+        )
+
+    def apply_settings(self, settings: UISettings) -> None:
+        self._settings = settings
+        self.combo_style.setCurrentText(settings.nr_style)
+        self.slider_intensity.setValue(settings.nr_intensity)
+        self.slider_passes.setValue(float(settings.nr_passes))
+        self.slider_tone.setValue(settings.local_tone_strength)
+        self.slider_structure.setValue(settings.local_structure_strength)
+        self.slider_skin.setValue(settings.skin_structure_strength)
+        self.slider_color_strength.setValue(settings.nr_color_strength)
+        self.slider_tone_preservation.setValue(settings.tone_preservation)
+        self.slider_face_protection.setValue(settings.face_skin_protection)
+        self.slider_grain.setValue(settings.grain_preservation)
+        self.slider_shimmer.setValue(settings.shimmer_suppression)
+        self.slider_feather.setValue(float(settings.mask_feather))
+        self.chk_auto_mask.setChecked(settings.automatic_mask)
+
+        for idx in range(self.combo_scale.count()):
+            val = float(self.combo_scale.itemData(idx) or 1.0)
+            if abs(val - settings.upscaling_factor) < 0.01:
+                self.combo_scale.setCurrentIndex(idx)
+                break
+
+        self.combo_codec.setCurrentText(settings.codec)
+        self.combo_container.setCurrentText(settings.container)
+        self.chk_hdr.setChecked(settings.hdr_mode)
+
+        self._trigger_preview()
+
+    def _on_save_settings(self) -> None:
+        presets_dir = Path("presets")
+        presets_dir.mkdir(parents=True, exist_ok=True)
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Settings Preset",
+            str(presets_dir / "custom_preset.json"),
+            "JSON Preset (*.json);;All Files (*.*)",
+        )
+        if not file_path:
+            return
+
+        if not file_path.lower().endswith(".json"):
+            file_path += ".json"
+
+        target = Path(file_path)
+        try:
+            current = self.get_current_settings()
+            doc = preset_document(target.stem, current)
+            target.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            self.statusMessage.emit(f"Settings saved to {target.name}", False)
+            QMessageBox.information(self, "Settings Saved", f"Settings preset successfully saved to:\n{target.name}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Save Error", f"Failed to save preset: {exc}")
+
+    def _on_load_settings(self) -> None:
+        presets_dir = Path("presets")
+        presets_dir.mkdir(parents=True, exist_ok=True)
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Settings Preset",
+            str(presets_dir),
+            "JSON Preset (*.json);;All Files (*.*)",
+        )
+        if not file_path:
+            return
+
+        try:
+            name, new_settings = import_settings_preset(file_path, self._settings)
+            self.apply_settings(new_settings)
+            self.statusMessage.emit(f"Loaded preset: {name}", False)
+            QMessageBox.information(self, "Settings Loaded", f"Preset '{name}' loaded successfully.")
+        except Exception as exc:
+            QMessageBox.critical(self, "Load Error", f"Failed to load preset:\n{exc}")
+
     def _on_save_image(self) -> None:
         if self._latest_preview_qimage is None:
             QMessageBox.information(self, "Save Image", "No enhanced preview available to save.")
@@ -637,6 +758,8 @@ class NeuralRenderingTab(QWidget):
 
     def update_settings(self, settings: UISettings) -> None:
         self._settings = settings
+        self.combo_codec.setCurrentText(settings.codec)
+        self.combo_container.setCurrentText(settings.container)
 
     def _start_video_render(self, is_1_frame: bool = False, is_3s: bool = False) -> None:
         if not self._current_file_path:

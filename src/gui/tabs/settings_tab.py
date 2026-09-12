@@ -24,7 +24,7 @@ from ...settings.models import (
     QUALITY_CHOICES,
     UISettings,
 )
-from ...settings.storage import save_settings
+from ...settings.storage import load_settings, save_settings
 
 
 class SettingsTab(QWidget):
@@ -149,12 +149,44 @@ class SettingsTab(QWidget):
         dir_layout.addWidget(cfg_lbl)
         layout.addWidget(dir_box)
 
-        # Save Button
+        # Actions Box
+        action_box = QGroupBox("Configuration Profile Management")
+        action_layout = QVBoxLayout(action_box)
+        action_layout.setSpacing(10)
+
+        row_cfg = QHBoxLayout()
+        row_cfg.setSpacing(8)
+
         btn_save = QPushButton("Save Settings to Config")
         btn_save.setProperty("class", "primary")
-        btn_save.setFixedWidth(240)
+        btn_save.setToolTip("Persist current configuration to config.ini for startup")
         btn_save.clicked.connect(self._save_settings)
-        layout.addWidget(btn_save)
+        row_cfg.addWidget(btn_save)
+
+        btn_load = QPushButton("Load Settings from Config")
+        btn_load.setToolTip("Reload configuration values from config.ini")
+        btn_load.clicked.connect(self._load_settings)
+        row_cfg.addWidget(btn_load)
+
+        action_layout.addLayout(row_cfg)
+
+        row_file = QHBoxLayout()
+        row_file.setSpacing(8)
+
+        btn_export = QPushButton("Export Profile...")
+        btn_export.setProperty("class", "mini-btn")
+        btn_export.setToolTip("Export complete settings profile to a JSON file")
+        btn_export.clicked.connect(self._export_profile)
+        row_file.addWidget(btn_export)
+
+        btn_import = QPushButton("Import Profile...")
+        btn_import.setProperty("class", "mini-btn")
+        btn_import.setToolTip("Import complete settings profile from a JSON file")
+        btn_import.clicked.connect(self._import_profile)
+        row_file.addWidget(btn_import)
+
+        action_layout.addLayout(row_file)
+        layout.addWidget(action_box)
 
         layout.addStretch()
         scroll_area.setWidget(container)
@@ -173,6 +205,21 @@ class SettingsTab(QWidget):
 
     def _on_reset_output_dir(self) -> None:
         self.txt_output_dir.setText(str(OUTPUTS))
+
+    def _apply_settings_to_ui(self, settings: UISettings) -> None:
+        for idx in range(self.combo_ai_gpu.count()):
+            if str(self.combo_ai_gpu.itemData(idx)) == str(settings.ai_gpu_uuid):
+                self.combo_ai_gpu.setCurrentIndex(idx)
+                break
+
+        for idx in range(self.combo_engine_path.count()):
+            if bool(self.combo_engine_path.itemData(idx)) == bool(settings.nr_gpu_mode):
+                self.combo_engine_path.setCurrentIndex(idx)
+                break
+
+        self.combo_image_format.setCurrentText(settings.image_format)
+        self.combo_codec.setCurrentText(settings.codec)
+        self.txt_output_dir.setText(str(settings.get_output_dir()))
 
     def _save_settings(self) -> None:
         try:
@@ -200,3 +247,67 @@ class SettingsTab(QWidget):
             QMessageBox.information(self, "Settings Saved", "Configuration saved successfully to config.ini.")
         except Exception as exc:
             QMessageBox.critical(self, "Save Error", f"Failed to save settings: {exc}")
+
+    def _load_settings(self) -> None:
+        try:
+            loaded = load_settings(CONFIG_PATH)
+            self._settings = loaded
+            self._apply_settings_to_ui(loaded)
+            self.settingsSaved.emit()
+            QMessageBox.information(self, "Settings Loaded", "Configuration loaded successfully from config.ini.")
+        except Exception as exc:
+            QMessageBox.critical(self, "Load Error", f"Failed to load settings: {exc}")
+
+    def _export_profile(self) -> None:
+        try:
+            import json
+            from pathlib import Path
+            from PyQt6.QtWidgets import QFileDialog
+            from ...settings.presets import preset_document
+
+            presets_dir = Path("presets")
+            presets_dir.mkdir(parents=True, exist_ok=True)
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Export Settings Profile",
+                str(presets_dir / "settings_profile.json"),
+                "JSON Preset (*.json);;All Files (*.*)",
+            )
+            if not file_path:
+                return
+
+            if not file_path.lower().endswith(".json"):
+                file_path += ".json"
+
+            target = Path(file_path)
+            doc = preset_document(target.stem, self._settings)
+            target.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            QMessageBox.information(self, "Profile Exported", f"Settings profile successfully exported to:\n{target.name}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Error", f"Failed to export profile: {exc}")
+
+    def _import_profile(self) -> None:
+        try:
+            from pathlib import Path
+            from PyQt6.QtWidgets import QFileDialog
+            from ...settings.presets import import_settings_preset
+
+            presets_dir = Path("presets")
+            presets_dir.mkdir(parents=True, exist_ok=True)
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Import Settings Profile",
+                str(presets_dir),
+                "JSON Preset (*.json);;All Files (*.*)",
+            )
+            if not file_path:
+                return
+
+            name, new_settings = import_settings_preset(file_path, self._settings)
+            self._settings = new_settings
+            self._apply_settings_to_ui(new_settings)
+            save_settings(CONFIG_PATH, new_settings)
+            self.settingsSaved.emit()
+            QMessageBox.information(self, "Profile Imported", f"Settings profile '{name}' imported and applied successfully.")
+        except Exception as exc:
+            QMessageBox.critical(self, "Import Error", f"Failed to import profile: {exc}")
