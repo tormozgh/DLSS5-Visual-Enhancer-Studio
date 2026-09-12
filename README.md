@@ -11,14 +11,6 @@ A standalone, high-performance Windows Desktop application (built with PyQt6 and
 
 This native studio suite replaces browser-based interfaces with an ultra-responsive, zero-latency desktop workflow engineered for creative artists, video editors, and AI visual enthusiasts.
 
----
-
-## Authorship & Credits
-
-- **Original Core Engine:** Developed by [Merserk](https://github.com/Merserk/dlss5-visual-enhancer)
-- **Desktop Studio:** Developed by [tormozgh](https://github.com/tormozgh)
-
----
 
 ## Why the Native Studio Edition?
 
@@ -94,6 +86,13 @@ The original web UI relied on local browser rendering and round-trip server requ
   - **DLSS 5 Neural Rendering:** GeForce RTX 20, 30, 40, and 50 Series (Turing, Ampere, Ada Lovelace, Blackwell).
   - **Frame Generation (DLSSG):** GeForce RTX 40 and 50 Series GPUs (Hardware-accelerated GPU scheduling / HAGS recommended).
   - **RTX Video Super Resolution & HDR:** RTX 30, 40, and 50 Series GPUs.
+
+---
+
+## Authorship & Credits
+
+- **Original Core Engine:** Developed by [Merserk](https://github.com/Merserk/dlss5-visual-enhancer)
+- **Desktop Studio:** Developed by [tormozgh](https://github.com/tormozgh)
 
 ---
 
