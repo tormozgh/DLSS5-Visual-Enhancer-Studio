@@ -21,6 +21,7 @@ import numpy as np
 
 from src.core.reshade import ReShadeEngine
 from src.core.streamline import StreamlineHostEngine
+from src.live.camera import CameraDeviceInfo, WebcamReceiver
 from src.live.ndi import NdiReceiver, NdiSender, NdiSourceFinder
 from src.live.recorder import LiveRecorder, RecorderTelemetry
 from src.live.upscaler import RealtimeNISUpscaler
@@ -62,9 +63,11 @@ class RealtimePipeline:
         self.finder = NdiSourceFinder()
 
         self._receiver: NdiReceiver | None = None
+        self._camera_receiver: WebcamReceiver | None = None
         self._sender: NdiSender | None = None
         self._lock = threading.Lock()
         self._is_running = False
+        self._source_type = "ndi"
 
         self._last_raw_frame: np.ndarray | None = None
         self._last_fps: float = 60.0
@@ -90,6 +93,10 @@ class RealtimePipeline:
         """Return discovered NDI sources on local network."""
         return self.finder.get_sources()
 
+    def get_cameras(self) -> list[CameraDeviceInfo]:
+        """Return discovered video capture hardware devices."""
+        return WebcamReceiver.list_cameras()
+
     def start_pipeline(
         self,
         source_name: str,
@@ -103,6 +110,7 @@ class RealtimePipeline:
 
             self._current_source_name = source_name
             self._current_url = url_address
+            self._source_type = "ndi"
             self._is_running = True
             self._fps_tracker_time = time.perf_counter()
             self._fps_frame_count = 0
@@ -123,8 +131,74 @@ class RealtimePipeline:
             )
             self._receiver.start()
 
+    def start_webcam_pipeline(
+        self,
+        device_index: int = 0,
+        width: int = 1920,
+        height: int = 1080,
+        fps: float = 60.0,
+        enable_ndi_out: bool = True,
+    ) -> None:
+        """Start capturing from DirectShow webcam or capture card."""
+        with self._lock:
+            if self._is_running:
+                self.stop_pipeline()
+
+            self._current_source_name = f"Camera {device_index}"
+            self._source_type = "webcam"
+            self._is_running = True
+            self._fps_tracker_time = time.perf_counter()
+            self._fps_frame_count = 0
+            self._total_frames = 0
+
+            if enable_ndi_out:
+                self._sender = NdiSender(self.sender_name)
+                self._sender.start()
+            else:
+                self._sender = None
+
+            self._camera_receiver = WebcamReceiver(
+                device_index=device_index,
+                target_width=width,
+                target_height=height,
+                target_fps=fps,
+                on_video_frame=self._on_incoming_video_frame,
+            )
+            self._camera_receiver.start()
+
+    def start_internal_pipeline(
+        self,
+        source_name: str = "Real-Time Rendering Output",
+        enable_ndi_out: bool = True,
+    ) -> None:
+        """Start in-memory ingestion directly from another pipeline stage."""
+        with self._lock:
+            if self._is_running:
+                self.stop_pipeline()
+
+            self._current_source_name = source_name
+            self._source_type = "internal"
+            self._is_running = True
+            self._fps_tracker_time = time.perf_counter()
+            self._fps_frame_count = 0
+            self._total_frames = 0
+
+            if enable_ndi_out:
+                self._sender = NdiSender(self.sender_name)
+                self._sender.start()
+            else:
+                self._sender = None
+
+    def feed_internal_frame(self, original_rgba: np.ndarray, enhanced_rgba: np.ndarray) -> None:
+        """Direct in-memory frame pushing from another pipeline."""
+        if not self._is_running or self._source_type != "internal":
+            return
+        now = time.perf_counter()
+        ts = int(now * 1000)
+        self._on_incoming_video_frame(enhanced_rgba, ts, 60.0)
+
     def stop_pipeline(self) -> None:
-        """Stop receiver, sender, and recording."""
+        """Stop receiver, webcam, sender, and recording."""
         with self._lock:
             self._is_running = False
 
@@ -134,6 +208,13 @@ class RealtimePipeline:
                 except Exception:
                     pass
                 self._receiver = None
+
+            if self._camera_receiver:
+                try:
+                    self._camera_receiver.stop()
+                except Exception:
+                    pass
+                self._camera_receiver = None
 
             if self._sender:
                 try:

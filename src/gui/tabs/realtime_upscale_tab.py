@@ -1,14 +1,16 @@
-"""Real-Time Rendering Tab: NDI 6 In/Out, NVIDIA Streamline 2.13, ReShade FX & NVENC Live Recording."""
+"""Real-Time Upscale Tab: NVIDIA NIS, Spatial Edge Reconstruction, Multi-Input (NDI, Webcam, Internal)."""
 
 from __future__ import annotations
 
 import os
 import threading
+import time
 from pathlib import Path
 
+import cv2
 import numpy as np
-from PyQt6.QtCore import QObject, QPointF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QImage, QPixmap
+from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QImage
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -21,32 +23,31 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSlider,
     QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
 from ...core.paths import OUTPUTS
-from ...core.reshade import ReShadePresetManager, ReShadeSettings
+from ...live.camera import CameraDeviceInfo, WebcamReceiver
 from ...live.engine import PipelineTelemetry, RealtimePipeline
+from ...live.ndi import NdiSender
+from ...live.recorder import LiveRecorder
+from ...live.upscaler import NISConfig, RealtimeNISUpscaler
 from ...settings.models import UISettings
 from ..components.sliders import LabeledSlider
 from ..components.split_canvas import CanvasViewMode, SplitCanvas
 
 
 class _SignalBridge(QObject):
-    """Bridge for cross-thread signals from background pipeline to Qt GUI."""
-
     frameReady = pyqtSignal(object, object)
     telemetryUpdated = pyqtSignal(object)
 
 
-class RealtimeRenderingTab(QWidget):
-    """Real-time neural broadcast studio tab."""
+class RealtimeUpscaleTab(QWidget):
+    """Dedicated Real-Time Upscaling & Directional Sharpening Studio Tab."""
 
     statusMessage = pyqtSignal(str, bool)
-    frameProduced = pyqtSignal(object, object)  # (original_rgba, enhanced_rgba) for inter-tab feed
 
     def __init__(self, settings: UISettings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -54,36 +55,40 @@ class RealtimeRenderingTab(QWidget):
         self._signals = _SignalBridge()
         self._signals.telemetryUpdated.connect(self._on_telemetry_gui)
 
-        self._preset_manager = ReShadePresetManager()
         self._frame_lock = threading.Lock()
         self._latest_frames: tuple[np.ndarray, np.ndarray] | None = None
+        self._last_raw_frame: np.ndarray | None = None
 
+        # Dedicated pipeline and upscaler
         self._pipeline = RealtimePipeline(
-            sender_name="DLSS 5 Visual Enhancer Studio",
+            sender_name="DLSS 5 Real-Time Upscale Studio",
             on_frame_ready=self._on_pipeline_frame_ready,
             on_telemetry=self._on_pipeline_telemetry,
         )
+        self.upscaler = self._pipeline.upscaler
+        self.upscaler.config.enabled = True
+        self.upscaler.config.scale_factor = 2.0
+        self.upscaler.config.sharpness = 0.50
 
-        self._init_ui()
-        self._refresh_sources_list()
-
-        # Viewport render timer (decoupled from 60+ FPS broadcast loop)
+        # UI rendering timer (~30-40 FPS)
         self._viewport_timer = QTimer(self)
-        self._viewport_timer.setInterval(25)  # 40 FPS UI monitor refresh
+        self._viewport_timer.setInterval(28)
         self._viewport_timer.timeout.connect(self._render_viewport_tick)
         self._viewport_timer.start()
 
-        # Periodic timer to refresh sources in dropdown
+        # NDI discovery timer
         self._source_timer = QTimer(self)
-        self._source_timer.setInterval(3000)
+        self._source_timer.setInterval(2500)
         self._source_timer.timeout.connect(self._refresh_sources_list)
         self._source_timer.start()
 
-        # Telemetry timer for recording duration update
+        # Recording timer
         self._rec_timer = QTimer(self)
         self._rec_timer.setInterval(500)
         self._rec_timer.timeout.connect(self._update_recorder_ui)
         self._rec_timer.start()
+
+        self._init_ui()
 
     def _init_ui(self) -> None:
         root_layout = QHBoxLayout(self)
@@ -94,7 +99,7 @@ class RealtimeRenderingTab(QWidget):
         splitter.setChildrenCollapsible(False)
 
         # ----------------------------------------------------------------------
-        # RIGHT COLUMN: Control Sidebar (Scrollable)
+        # RIGHT COLUMN: Controls Sidebar (Scrollable)
         # ----------------------------------------------------------------------
         sidebar_scroll = QScrollArea()
         sidebar_scroll.setWidgetResizable(True)
@@ -107,22 +112,33 @@ class RealtimeRenderingTab(QWidget):
         sidebar_layout.setContentsMargins(10, 10, 10, 10)
         sidebar_layout.setSpacing(14)
 
-        # 1. Live Input Source Selection (NDI & Webcam)
-        ingest_box = QGroupBox("Live Input Source")
-        ib_layout = QVBoxLayout(ingest_box)
+        # 1. Live Input Source Selection
+        input_box = QGroupBox("Live Input Source")
+        ib_layout = QVBoxLayout(input_box)
         ib_layout.setSpacing(8)
 
-        mode_row = QHBoxLayout()
-        mode_lbl = QLabel("Input Type:")
-        mode_lbl.setStyleSheet("color: #9ca0ab; font-size: 11px;")
-        mode_row.addWidget(mode_lbl)
+        type_row = QHBoxLayout()
+        type_lbl = QLabel("Input Source:")
+        type_lbl.setStyleSheet("color: #9ca0ab; font-size: 11px;")
+        type_row.addWidget(type_lbl)
 
         self.cmb_input_type = QComboBox()
+        self.cmb_input_type.addItem("Internal: Real-Time Rendering Output", "internal")
         self.cmb_input_type.addItem("NDI Network Stream", "ndi")
         self.cmb_input_type.addItem("Webcam / Capture Card", "webcam")
         self.cmb_input_type.currentIndexChanged.connect(self._on_input_type_changed)
-        mode_row.addWidget(self.cmb_input_type, 1)
-        ib_layout.addLayout(mode_row)
+        type_row.addWidget(self.cmb_input_type, 1)
+        ib_layout.addLayout(type_row)
+
+        # Internal feed notice
+        self.widget_internal_info = QWidget()
+        internal_layout = QVBoxLayout(self.widget_internal_info)
+        internal_layout.setContentsMargins(0, 0, 0, 0)
+        lbl_internal_desc = QLabel("Receiving live frames directly from Real-Time Rendering tab in-memory.")
+        lbl_internal_desc.setStyleSheet("color: #4ade80; font-size: 11px; font-weight: 500;")
+        lbl_internal_desc.setWordWrap(True)
+        internal_layout.addWidget(lbl_internal_desc)
+        ib_layout.addWidget(self.widget_internal_info)
 
         # NDI Selector
         self.widget_ndi_input = QWidget()
@@ -137,6 +153,7 @@ class RealtimeRenderingTab(QWidget):
         self.btn_refresh_sources.setProperty("class", "mini-btn")
         self.btn_refresh_sources.clicked.connect(self._refresh_sources_list)
         ndi_input_layout.addWidget(self.btn_refresh_sources)
+        self.widget_ndi_input.setVisible(False)
         ib_layout.addWidget(self.widget_ndi_input)
 
         # Webcam Selector
@@ -155,141 +172,90 @@ class RealtimeRenderingTab(QWidget):
         self.widget_webcam_input.setVisible(False)
         ib_layout.addWidget(self.widget_webcam_input)
 
-        self.btn_toggle_stream = QPushButton("Connect & Start Live Stream")
+        self.btn_toggle_stream = QPushButton("Connect & Start Upscaling")
         self.btn_toggle_stream.setProperty("class", "primary")
         self.btn_toggle_stream.clicked.connect(self._on_toggle_stream)
         ib_layout.addWidget(self.btn_toggle_stream)
 
-        self.lbl_stream_status = QLabel("Status: Standby (No stream connected)")
+        self.lbl_stream_status = QLabel("Status: Standby (Click Connect to activate)")
         self.lbl_stream_status.setStyleSheet("color: #9ca0ab; font-size: 11px;")
         ib_layout.addWidget(self.lbl_stream_status)
 
-        sidebar_layout.addWidget(ingest_box)
+        sidebar_layout.addWidget(input_box)
 
-        # 2. NVIDIA Streamline 2.13 Engine Card
-        sl_box = QGroupBox("NVIDIA Streamline 2.13 Engine")
-        sl_layout = QVBoxLayout(sl_box)
-        sl_layout.setSpacing(8)
+        # 2. Real-Time Upscale Settings
+        scale_box = QGroupBox("Real-Time Upscale Engine")
+        sb_layout = QVBoxLayout(scale_box)
+        sb_layout.setSpacing(8)
 
-        self.chk_sl_enabled = QCheckBox("Enable Streamline Neural Enhancement")
-        self.chk_sl_enabled.setChecked(True)
-        self.chk_sl_enabled.toggled.connect(self._on_sl_config_changed)
-        sl_layout.addWidget(self.chk_sl_enabled)
+        self.chk_upscale_enabled = QCheckBox("Enable Real-Time Upscaling")
+        self.chk_upscale_enabled.setChecked(True)
+        self.chk_upscale_enabled.toggled.connect(self._on_upscale_config_changed)
+        sb_layout.addWidget(self.chk_upscale_enabled)
 
-        self.chk_sl_nr = QCheckBox("DLSS-NR Neural Reconstruction")
-        self.chk_sl_nr.setChecked(True)
-        self.chk_sl_nr.toggled.connect(self._on_sl_config_changed)
-        sl_layout.addWidget(self.chk_sl_nr)
+        # Scaling Algorithm
+        algo_row = QHBoxLayout()
+        algo_lbl = QLabel("Algorithm:")
+        algo_lbl.setStyleSheet("color: #9ca0ab; font-size: 11px;")
+        algo_row.addWidget(algo_lbl)
 
-        self.slider_nr_intensity = LabeledSlider("NR Denoising Intensity", 0.0, 1.0, 0.85, step=0.05, decimals=2)
-        self.slider_nr_intensity.valueChanged.connect(self._on_sl_config_changed)
-        sl_layout.addWidget(self.slider_nr_intensity)
+        self.cmb_algo = QComboBox()
+        self.cmb_algo.addItem("NVIDIA NIS (Directional Edge Scaling)", "nis")
+        self.cmb_algo.addItem("FidelityFX CAS Spatial Scaler", "cas")
+        self.cmb_algo.addItem("Bicubic Catmull-Rom (Smooth)", "bicubic")
+        self.cmb_algo.addItem("Bilinear Fast", "bilinear")
+        self.cmb_algo.currentIndexChanged.connect(self._on_upscale_config_changed)
+        algo_row.addWidget(self.cmb_algo, 1)
+        sb_layout.addLayout(algo_row)
 
-        self.slider_nr_structure = LabeledSlider("Structural Detail", 0.0, 1.0, 0.65, step=0.05, decimals=2)
-        self.slider_nr_structure.valueChanged.connect(self._on_sl_config_changed)
-        sl_layout.addWidget(self.slider_nr_structure)
+        # Target Preset
+        target_row = QHBoxLayout()
+        target_lbl = QLabel("Target Scale:")
+        target_lbl.setStyleSheet("color: #9ca0ab; font-size: 11px;")
+        target_row.addWidget(target_lbl)
 
-        self.chk_sl_frame_gen = QCheckBox("DLSS-G Multi-Frame Generation (2x FPS: 60 -> 120)")
-        self.chk_sl_frame_gen.setChecked(False)
-        self.chk_sl_frame_gen.toggled.connect(self._on_sl_config_changed)
-        sl_layout.addWidget(self.chk_sl_frame_gen)
+        self.cmb_target = QComboBox()
+        self.cmb_target.addItem("2.00x Ultra Quality (1080p -> 4K UHD)", ("scale", 2.0, (0, 0)))
+        self.cmb_target.addItem("1.50x Quality (720p -> 1080p / 1080p -> 1620p)", ("scale", 1.5, (0, 0)))
+        self.cmb_target.addItem("1.25x Balanced", ("scale", 1.25, (0, 0)))
+        self.cmb_target.addItem("3.00x Extreme Scale", ("scale", 3.0, (0, 0)))
+        self.cmb_target.addItem("4.00x Maximum Scale", ("scale", 4.0, (0, 0)))
+        self.cmb_target.addItem("Target 1080p FHD (1920x1080)", ("fit", 1.0, (1920, 1080)))
+        self.cmb_target.addItem("Target 1440p 2K (2560x1440)", ("fit", 1.0, (2560, 1440)))
+        self.cmb_target.addItem("Target 4K UHD (3840x2160)", ("fit", 1.0, (3840, 2160)))
+        self.cmb_target.addItem("Native Resolution + Sharpening Only", ("scale", 1.0, (0, 0)))
+        self.cmb_target.currentIndexChanged.connect(self._on_upscale_config_changed)
+        target_row.addWidget(self.cmb_target, 1)
+        sb_layout.addLayout(target_row)
 
-        lbl_nvof_tag = QLabel("Motion Vectors: RTX Hardware Optical Flow (NVOF)")
-        lbl_nvof_tag.setStyleSheet("color: #7b8190; font-size: 10px;")
-        sl_layout.addWidget(lbl_nvof_tag)
+        sidebar_layout.addWidget(scale_box)
 
-        sidebar_layout.addWidget(sl_box)
+        # 3. Directional Sharpening & Anti-Ringing
+        sharp_box = QGroupBox("Directional Sharpening & Anti-Ringing")
+        sh_layout = QVBoxLayout(sharp_box)
+        sh_layout.setSpacing(8)
 
-        # 3. ReShade FX Post-Processing Card
-        rs_box = QGroupBox("ReShade FX Post-Processing")
-        rs_layout = QVBoxLayout(rs_box)
-        rs_layout.setSpacing(8)
+        self.slider_sharpness = LabeledSlider("NIS Directional Sharpness", 0.0, 1.0, 0.50, step=0.05, decimals=2)
+        self.slider_sharpness.valueChanged.connect(self._on_upscale_config_changed)
+        sh_layout.addWidget(self.slider_sharpness)
 
-        self.chk_rs_enabled = QCheckBox("Enable ReShade FX Shaders")
-        self.chk_rs_enabled.setChecked(True)
-        self.chk_rs_enabled.toggled.connect(self._on_rs_config_changed)
-        rs_layout.addWidget(self.chk_rs_enabled)
+        self.slider_anti_ringing = LabeledSlider("Anti-Ringing Clamping", 0.0, 1.0, 0.85, step=0.05, decimals=2)
+        self.slider_anti_ringing.valueChanged.connect(self._on_upscale_config_changed)
+        sh_layout.addWidget(self.slider_anti_ringing)
 
-        preset_row = QHBoxLayout()
-        preset_label = QLabel("Preset:")
-        preset_label.setStyleSheet("color: #9ca0ab; font-size: 11px;")
-        preset_row.addWidget(preset_label)
+        lbl_sharp_tag = QLabel("Clamps high-frequency boost between local contrast bounds to eliminate halos.")
+        lbl_sharp_tag.setStyleSheet("color: #7b8190; font-size: 10px;")
+        lbl_sharp_tag.setWordWrap(True)
+        sh_layout.addWidget(lbl_sharp_tag)
 
-        self.cmb_presets = QComboBox()
-        for p in self._preset_manager.get_preset_names():
-            self.cmb_presets.addItem(p)
-        self.cmb_presets.setCurrentText("Cinematic Teal & Orange")
-        self.cmb_presets.currentTextChanged.connect(self._on_preset_selected)
-        preset_row.addWidget(self.cmb_presets, 1)
-        rs_layout.addLayout(preset_row)
+        sidebar_layout.addWidget(sharp_box)
 
-        # 3D LUT Controls
-        self.chk_lut = QCheckBox("3D LUT Color Grading")
-        self.chk_lut.setChecked(True)
-        self.chk_lut.toggled.connect(self._on_rs_config_changed)
-        rs_layout.addWidget(self.chk_lut)
-
-        self.cmb_lut_name = QComboBox()
-        for name in self._pipeline.reshade.lut_manager.available_luts:
-            self.cmb_lut_name.addItem(name)
-        self.cmb_lut_name.setCurrentText("Cinematic Teal & Orange")
-        self.cmb_lut_name.currentTextChanged.connect(self._on_rs_config_changed)
-        rs_layout.addWidget(self.cmb_lut_name)
-
-        self.slider_lut_strength = LabeledSlider("LUT Strength", 0.0, 1.0, 0.85, step=0.05, decimals=2)
-        self.slider_lut_strength.valueChanged.connect(self._on_rs_config_changed)
-        rs_layout.addWidget(self.slider_lut_strength)
-
-        # ACES Tonemap Controls
-        self.chk_tonemap = QCheckBox("ACES Filmic Dynamic Tonemapper")
-        self.chk_tonemap.setChecked(True)
-        self.chk_tonemap.toggled.connect(self._on_rs_config_changed)
-        rs_layout.addWidget(self.chk_tonemap)
-
-        self.slider_exposure = LabeledSlider("Exposure Bias", -2.0, 2.0, 0.0, step=0.05, decimals=2, suffix=" EV")
-        self.slider_exposure.valueChanged.connect(self._on_rs_config_changed)
-        rs_layout.addWidget(self.slider_exposure)
-
-        self.slider_contrast = LabeledSlider("Contrast", 0.5, 2.0, 1.05, step=0.05, decimals=2)
-        self.slider_contrast.valueChanged.connect(self._on_rs_config_changed)
-        rs_layout.addWidget(self.slider_contrast)
-
-        self.slider_saturation = LabeledSlider("Saturation", 0.0, 2.0, 1.10, step=0.05, decimals=2)
-        self.slider_saturation.valueChanged.connect(self._on_rs_config_changed)
-        rs_layout.addWidget(self.slider_saturation)
-
-        self.slider_temperature = LabeledSlider("Color Temperature", -1.0, 1.0, 0.0, step=0.05, decimals=2)
-        self.slider_temperature.valueChanged.connect(self._on_rs_config_changed)
-        rs_layout.addWidget(self.slider_temperature)
-
-        # Film Grain
-        self.chk_grain = QCheckBox("ReShade FilmGrain.fx")
-        self.chk_grain.setChecked(True)
-        self.chk_grain.toggled.connect(self._on_rs_config_changed)
-        rs_layout.addWidget(self.chk_grain)
-
-        self.slider_grain_intensity = LabeledSlider("Film Grain Intensity", 0.0, 1.0, 0.15, step=0.01, decimals=2)
-        self.slider_grain_intensity.valueChanged.connect(self._on_rs_config_changed)
-        rs_layout.addWidget(self.slider_grain_intensity)
-
-        # CAS
-        self.chk_cas = QCheckBox("CAS (Contrast Adaptive Sharpening)")
-        self.chk_cas.setChecked(True)
-        self.chk_cas.toggled.connect(self._on_rs_config_changed)
-        rs_layout.addWidget(self.chk_cas)
-
-        self.slider_cas_sharpness = LabeledSlider("CAS Sharpness", 0.0, 1.0, 0.40, step=0.05, decimals=2)
-        self.slider_cas_sharpness.valueChanged.connect(self._on_rs_config_changed)
-        rs_layout.addWidget(self.slider_cas_sharpness)
-
-        sidebar_layout.addWidget(rs_box)
-
-        # 4. NDI Broadcast Output Card
+        # 4. NDI Broadcast Output
         ndi_out_box = QGroupBox("NDI Broadcast Output")
         out_layout = QVBoxLayout(ndi_out_box)
         out_layout.setSpacing(6)
 
-        self.chk_broadcast_enabled = QCheckBox("Enable NDI Out: DLSS 5 Visual Enhancer Studio")
+        self.chk_broadcast_enabled = QCheckBox("Enable NDI Out: DLSS 5 Real-Time Upscale Studio")
         self.chk_broadcast_enabled.setChecked(True)
         out_layout.addWidget(self.chk_broadcast_enabled)
 
@@ -310,12 +276,11 @@ class RealtimeRenderingTab(QWidget):
 
         sidebar_layout.addWidget(ndi_out_box)
 
-        # 5. Live Recording Configuration & Capture Card
+        # 5. Live Recording Configuration
         rec_box = QGroupBox("Live Recording Settings & Control")
         rec_layout = QVBoxLayout(rec_box)
         rec_layout.setSpacing(8)
 
-        # Storage location row
         loc_label = QLabel("Storage Location:")
         loc_label.setStyleSheet("color: #9ca0ab; font-size: 11px;")
         rec_layout.addWidget(loc_label)
@@ -336,17 +301,14 @@ class RealtimeRenderingTab(QWidget):
         loc_row.addWidget(self.btn_open_folder)
         rec_layout.addLayout(loc_row)
 
-        # File Name Prefix
         prefix_label = QLabel("File Name Prefix:")
         prefix_label.setStyleSheet("color: #9ca0ab; font-size: 11px;")
         rec_layout.addWidget(prefix_label)
 
-        self.line_rec_prefix = QLineEdit("DLSS5_Live")
-        self.line_rec_prefix.setPlaceholderText("Prefix (e.g. Broadcast_Cam1)")
+        self.line_rec_prefix = QLineEdit("DLSS5_Upscale")
         self.line_rec_prefix.setStyleSheet("background-color: #17191e; border: 1px solid #282b33; border-radius: 4px; padding: 4px 8px; color: #d0d4dc; font-size: 11px;")
         rec_layout.addWidget(self.line_rec_prefix)
 
-        # Container Format & Output Resolution
         fmt_res_row = QHBoxLayout()
         fmt_res_row.setSpacing(8)
 
@@ -361,84 +323,65 @@ class RealtimeRenderingTab(QWidget):
         fmt_col.addWidget(self.cmb_rec_format)
         fmt_res_row.addLayout(fmt_col, 1)
 
-        res_col = QVBoxLayout()
-        res_label = QLabel("Resolution:")
-        res_label.setStyleSheet("color: #9ca0ab; font-size: 11px;")
-        res_col.addWidget(res_label)
-        self.cmb_rec_res = QComboBox()
-        self.cmb_rec_res.addItem("Match Stream (Auto)", (0, 0))
-        self.cmb_rec_res.addItem("1080p FHD (1920x1080)", (1920, 1080))
-        self.cmb_rec_res.addItem("1440p 2K (2560x1440)", (2560, 1440))
-        self.cmb_rec_res.addItem("4K UHD (3840x2160)", (3840, 2160))
-        self.cmb_rec_res.addItem("720p HD (1280x720)", (1280, 720))
-        res_col.addWidget(self.cmb_rec_res)
-        fmt_res_row.addLayout(res_col, 1)
-
+        bitrate_col = QVBoxLayout()
+        bitrate_lbl = QLabel("Bitrate:")
+        bitrate_lbl.setStyleSheet("color: #9ca0ab; font-size: 11px;")
+        bitrate_col.addWidget(bitrate_lbl)
+        self.cmb_rec_bitrate = QComboBox()
+        self.cmb_rec_bitrate.addItem("25 Mbps", 25)
+        self.cmb_rec_bitrate.addItem("50 Mbps", 50)
+        self.cmb_rec_bitrate.addItem("80 Mbps", 80)
+        self.cmb_rec_bitrate.setCurrentIndex(1)
+        bitrate_col.addWidget(self.cmb_rec_bitrate)
+        fmt_res_row.addLayout(bitrate_col, 1)
         rec_layout.addLayout(fmt_res_row)
 
-        # Bitrate
-        bitrate_label = QLabel("Video Bitrate:")
-        bitrate_label.setStyleSheet("color: #9ca0ab; font-size: 11px;")
-        rec_layout.addWidget(bitrate_label)
-
-        self.cmb_rec_bitrate = QComboBox()
-        self.cmb_rec_bitrate.addItem("15 Mbps (Standard Quality)", 15)
-        self.cmb_rec_bitrate.addItem("25 Mbps (Broadcast Standard)", 25)
-        self.cmb_rec_bitrate.addItem("50 Mbps (High Bitrate Studio)", 50)
-        self.cmb_rec_bitrate.addItem("80 Mbps (Master Archive)", 80)
-        self.cmb_rec_bitrate.setCurrentIndex(1)
-        rec_layout.addWidget(self.cmb_rec_bitrate)
-
-        # Record Trigger Button
         self.btn_record = QPushButton("Start Live Recording")
         self.btn_record.setProperty("class", "record-btn")
         self.btn_record.setStyleSheet("background-color: #7f1d1d; color: #fecaca; font-weight: bold; padding: 10px; border-radius: 4px; font-size: 12px;")
         self.btn_record.clicked.connect(self._on_toggle_record)
         rec_layout.addWidget(self.btn_record)
 
-        # Recording Status Label
         self.lbl_rec_status = QLabel("Recorder: Idle")
         self.lbl_rec_status.setStyleSheet("color: #9ca0ab; font-size: 11px;")
         rec_layout.addWidget(self.lbl_rec_status)
 
         sidebar_layout.addWidget(rec_box)
-
         sidebar_scroll.setWidget(sidebar)
 
         # ----------------------------------------------------------------------
-        # LEFT COLUMN: Live Viewport Canvas & Telemetry HUD
+        # LEFT COLUMN: Dual Split-View Canvas & Telemetry HUD
         # ----------------------------------------------------------------------
         viewport_container = QWidget()
         viewport_layout = QVBoxLayout(viewport_container)
         viewport_layout.setContentsMargins(0, 0, 0, 0)
         viewport_layout.setSpacing(8)
 
-        # Viewport Toolbar
         toolbar = QFrame()
         toolbar.setProperty("class", "toolbar")
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(8, 6, 8, 6)
         toolbar_layout.setSpacing(8)
 
-        self.btn_mode_split = QPushButton("Split Slider")
-        self.btn_mode_split.setProperty("class", "toolbar-btn")
-        self.btn_mode_split.clicked.connect(lambda: self.canvas.set_view_mode(CanvasViewMode.SPLIT))
-        toolbar_layout.addWidget(self.btn_mode_split)
+        btn_split = QPushButton("Split Slider")
+        btn_split.setProperty("class", "toolbar-btn")
+        btn_split.clicked.connect(lambda: self.canvas.set_view_mode(CanvasViewMode.SPLIT))
+        toolbar_layout.addWidget(btn_split)
 
-        self.btn_mode_side = QPushButton("Side-by-Side")
-        self.btn_mode_side.setProperty("class", "toolbar-btn")
-        self.btn_mode_side.clicked.connect(lambda: self.canvas.set_view_mode(CanvasViewMode.SIDE_BY_SIDE))
-        toolbar_layout.addWidget(self.btn_mode_side)
+        btn_side = QPushButton("Side-by-Side")
+        btn_side.setProperty("class", "toolbar-btn")
+        btn_side.clicked.connect(lambda: self.canvas.set_view_mode(CanvasViewMode.SIDE_BY_SIDE))
+        toolbar_layout.addWidget(btn_side)
 
-        self.btn_mode_after = QPushButton("Enhanced Only")
-        self.btn_mode_after.setProperty("class", "toolbar-btn")
-        self.btn_mode_after.clicked.connect(lambda: self.canvas.set_view_mode(CanvasViewMode.ONLY_AFTER))
-        toolbar_layout.addWidget(self.btn_mode_after)
+        btn_after = QPushButton("Upscaled Only")
+        btn_after.setProperty("class", "toolbar-btn")
+        btn_after.clicked.connect(lambda: self.canvas.set_view_mode(CanvasViewMode.ONLY_AFTER))
+        toolbar_layout.addWidget(btn_after)
 
-        self.btn_mode_before = QPushButton("Original Only")
-        self.btn_mode_before.setProperty("class", "toolbar-btn")
-        self.btn_mode_before.clicked.connect(lambda: self.canvas.set_view_mode(CanvasViewMode.ONLY_BEFORE))
-        toolbar_layout.addWidget(self.btn_mode_before)
+        btn_before = QPushButton("Original Only")
+        btn_before.setProperty("class", "toolbar-btn")
+        btn_before.clicked.connect(lambda: self.canvas.set_view_mode(CanvasViewMode.ONLY_BEFORE))
+        toolbar_layout.addWidget(btn_before)
 
         toolbar_layout.addStretch()
 
@@ -449,11 +392,9 @@ class RealtimeRenderingTab(QWidget):
 
         viewport_layout.addWidget(toolbar)
 
-        # Interactive Canvas
         self.canvas = SplitCanvas()
         viewport_layout.addWidget(self.canvas, 1)
 
-        # Studio Telemetry Bar (Bottom)
         hud_frame = QFrame()
         hud_frame.setProperty("class", "studio-card")
         hud_frame.setStyleSheet("background-color: #14161a; border: 1px solid #22252c; border-radius: 4px; padding: 6px;")
@@ -462,10 +403,10 @@ class RealtimeRenderingTab(QWidget):
         hud_layout.setSpacing(16)
 
         self.lbl_hud_res = QLabel("Resolution: --")
-        self.lbl_hud_res.setStyleSheet("color: #d0d4dc; font-weight: 600; font-size: 11px;")
+        self.lbl_hud_res.setStyleSheet("color: #e2e8f0; font-weight: 600; font-size: 11px;")
         hud_layout.addWidget(self.lbl_hud_res)
 
-        self.lbl_hud_fps = QLabel("FPS: -- (Render: --)")
+        self.lbl_hud_fps = QLabel("FPS: --")
         self.lbl_hud_fps.setStyleSheet("color: #38bdf8; font-weight: 600; font-size: 11px;")
         hud_layout.addWidget(self.lbl_hud_fps)
 
@@ -473,9 +414,9 @@ class RealtimeRenderingTab(QWidget):
         self.lbl_hud_latency.setStyleSheet("color: #4ade80; font-weight: 600; font-size: 11px;")
         hud_layout.addWidget(self.lbl_hud_latency)
 
-        self.lbl_hud_pipeline = QLabel("Engine: Streamline 2.13 + NIS + ReShade FX")
-        self.lbl_hud_pipeline.setStyleSheet("color: #9ca0ab; font-size: 11px;")
-        hud_layout.addWidget(self.lbl_hud_pipeline)
+        self.lbl_hud_scale = QLabel("Scale: 2.0x")
+        self.lbl_hud_scale.setStyleSheet("color: #a78bfa; font-weight: 600; font-size: 11px;")
+        hud_layout.addWidget(self.lbl_hud_scale)
 
         hud_layout.addStretch()
 
@@ -485,19 +426,34 @@ class RealtimeRenderingTab(QWidget):
 
         viewport_layout.addWidget(hud_frame)
 
-        # Add to splitter in left-to-right order: Canvas on LEFT, Sidebar on RIGHT
+        # Order in Splitter: Canvas on LEFT, Sidebar on RIGHT
         splitter.addWidget(viewport_container)
         splitter.addWidget(sidebar_scroll)
-        splitter.setStretchFactor(0, 1)  # Left (Canvas) expands
-        splitter.setStretchFactor(1, 0)  # Right (Sidebar) fixed width
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
 
         root_layout.addWidget(splitter)
 
+    # --------------------------------------------------------------------------
+    # Inter-Tab Frame Feed & Handlers
+    # --------------------------------------------------------------------------
+    def feed_internal_frame(self, original_rgba: np.ndarray, enhanced_rgba: np.ndarray) -> None:
+        """Receive rendered frames from Real-Time Rendering tab in-memory."""
+        if not self._pipeline.is_running or self.cmb_input_type.currentData() != "internal":
+            return
+        self._pipeline.feed_internal_frame(original_rgba, enhanced_rgba)
+
+    def _on_input_type_changed(self) -> None:
+        mode = self.cmb_input_type.currentData()
+        self.widget_internal_info.setVisible(mode == "internal")
+        self.widget_ndi_input.setVisible(mode == "ndi")
+        self.widget_webcam_input.setVisible(mode == "webcam")
+        if mode == "webcam":
+            self._refresh_cameras_list()
+
     def _refresh_sources_list(self) -> None:
         sources = self._pipeline.get_sources()
-        current_data = self.cmb_sources.currentData()
-
-        # Update items only if changed
+        current = self.cmb_sources.currentData()
         items = [(name, url) for name, url in sources]
         existing = [self.cmb_sources.itemData(i) for i in range(self.cmb_sources.count())]
 
@@ -509,16 +465,9 @@ class RealtimeRenderingTab(QWidget):
             else:
                 for name, url in items:
                     self.cmb_sources.addItem(name, url)
-                    if url == current_data:
+                    if url == current:
                         self.cmb_sources.setCurrentIndex(self.cmb_sources.count() - 1)
             self.cmb_sources.blockSignals(False)
-
-    def _on_input_type_changed(self) -> None:
-        mode = self.cmb_input_type.currentData()
-        self.widget_ndi_input.setVisible(mode == "ndi")
-        self.widget_webcam_input.setVisible(mode == "webcam")
-        if mode == "webcam":
-            self._refresh_cameras_list()
 
     def _refresh_cameras_list(self) -> None:
         cameras = self._pipeline.get_cameras()
@@ -532,18 +481,24 @@ class RealtimeRenderingTab(QWidget):
     def _on_toggle_stream(self) -> None:
         if self._pipeline.is_running:
             self._pipeline.stop_pipeline()
-            self.btn_toggle_stream.setText("Connect & Start Live Stream")
+            self.btn_toggle_stream.setText("Connect & Start Upscaling")
             self.btn_toggle_stream.setStyleSheet("")
             self.lbl_stream_status.setText("Status: Stopped")
-            self.statusMessage.emit("Live broadcast pipeline stopped", False)
+            self.statusMessage.emit("Real-time upscaling stopped", False)
         else:
             mode = self.cmb_input_type.currentData()
             enable_out = self.chk_broadcast_enabled.isChecked()
 
-            if mode == "webcam":
+            if mode == "internal":
+                self._pipeline.start_internal_pipeline(enable_ndi_out=enable_out)
+                self.btn_toggle_stream.setText("Stop Upscaling")
+                self.btn_toggle_stream.setStyleSheet("background-color: #991b1b; color: white;")
+                self.lbl_stream_status.setText("Status: Active (Receiving from Real-Time Rendering)")
+                self.statusMessage.emit("Connected to Real-Time Rendering feed", False)
+            elif mode == "webcam":
                 dev_idx = self.cmb_cameras.currentData()
                 if dev_idx is None:
-                    QMessageBox.warning(self, "No Camera Selected", "Please select an active video capture device.")
+                    QMessageBox.warning(self, "No Camera Selected", "Please select an active camera device.")
                     return
                 try:
                     self._pipeline.start_webcam_pipeline(
@@ -553,88 +508,43 @@ class RealtimeRenderingTab(QWidget):
                         fps=60.0,
                         enable_ndi_out=enable_out,
                     )
-                    self.btn_toggle_stream.setText("Stop Live Stream")
+                    self.btn_toggle_stream.setText("Stop Upscaling")
                     self.btn_toggle_stream.setStyleSheet("background-color: #991b1b; color: white;")
                     self.lbl_stream_status.setText(f"Status: Streaming from Camera {dev_idx}")
                     self.statusMessage.emit(f"Connected to camera index {dev_idx}", False)
                 except Exception as exc:
-                    QMessageBox.critical(self, "Camera Error", f"Failed to start camera capture: {exc}")
+                    QMessageBox.critical(self, "Camera Error", f"Failed to start camera: {exc}")
             else:
                 url = self.cmb_sources.currentData()
                 name = self.cmb_sources.currentText()
                 if not name or "No NDI sources" in name or "Searching" in name:
-                    QMessageBox.warning(
-                        self, "No NDI Source Selected", "Please select an active NDI broadcast source."
-                    )
+                    QMessageBox.warning(self, "No NDI Source Selected", "Please select an active NDI source.")
                     return
-
                 try:
-                    self._pipeline.start_pipeline(
-                        source_name=name,
-                        url_address=url,
-                        enable_ndi_out=enable_out,
-                    )
-                    self.btn_toggle_stream.setText("Stop Live Stream")
+                    self._pipeline.start_pipeline(source_name=name, url_address=url, enable_ndi_out=enable_out)
+                    self.btn_toggle_stream.setText("Stop Upscaling")
                     self.btn_toggle_stream.setStyleSheet("background-color: #991b1b; color: white;")
                     self.lbl_stream_status.setText(f"Status: Streaming from {name}")
                     self.statusMessage.emit(f"Connected to NDI source: {name}", False)
                 except Exception as exc:
-                    QMessageBox.critical(self, "Connection Error", f"Failed to start NDI pipeline: {exc}")
+                    QMessageBox.critical(self, "Connection Error", f"Failed to start NDI: {exc}")
 
-    def _on_sl_config_changed(self) -> None:
-        cfg = self._pipeline.streamline.config
-        cfg.enabled = self.chk_sl_enabled.isChecked()
-        cfg.enable_dlss_nr = self.chk_sl_nr.isChecked()
-        cfg.enable_frame_gen = self.chk_sl_frame_gen.isChecked()
-        cfg.nr_intensity = float(self.slider_nr_intensity.value())
-        cfg.nr_structure = float(self.slider_nr_structure.value())
-        self._pipeline.reprocess_last_frame()
-        self._render_viewport_tick()
+    def _on_upscale_config_changed(self) -> None:
+        cfg = self.upscaler.config
+        cfg.enabled = self.chk_upscale_enabled.isChecked()
 
-    def _on_rs_config_changed(self) -> None:
-        s = self._pipeline.reshade.settings
-        s.enabled = self.chk_rs_enabled.isChecked()
-        s.lut_enabled = self.chk_lut.isChecked()
-        s.lut_name = self.cmb_lut_name.currentText()
-        s.lut_strength = float(self.slider_lut_strength.value())
+        mode_data = self.cmb_target.currentData()
+        if mode_data:
+            mode_type, scale_val, target_res = mode_data
+            cfg.scale_mode = mode_type
+            cfg.scale_factor = scale_val
+            cfg.target_resolution = target_res
+            self.lbl_hud_scale.setText(f"Scale: {scale_val}x" if mode_type == "scale" else f"{target_res[0]}x{target_res[1]}")
 
-        s.tonemap_enabled = self.chk_tonemap.isChecked()
-        s.exposure = float(self.slider_exposure.value())
-        s.contrast = float(self.slider_contrast.value())
-        s.saturation = float(self.slider_saturation.value())
-        s.color_temperature = float(self.slider_temperature.value())
+        cfg.sharpness = float(self.slider_sharpness.value())
+        cfg.edge_contrast_limit = float(self.slider_anti_ringing.value())
 
-        s.grain_enabled = self.chk_grain.isChecked()
-        s.grain_intensity = float(self.slider_grain_intensity.value())
-
-        s.cas_enabled = self.chk_cas.isChecked()
-        s.cas_sharpness = float(self.slider_cas_sharpness.value())
-        self._pipeline.reprocess_last_frame()
-        self._render_viewport_tick()
-
-    def _on_preset_selected(self, preset_name: str) -> None:
-        if not preset_name:
-            return
-        settings = self._preset_manager.load_preset(preset_name)
-        self._pipeline.reshade.settings = settings
-
-        # Synchronize UI widgets
-        self.chk_rs_enabled.setChecked(settings.enabled)
-        self.chk_lut.setChecked(settings.lut_enabled)
-        self.cmb_lut_name.setCurrentText(settings.lut_name)
-        self.slider_lut_strength.setValue(settings.lut_strength)
-
-        self.chk_tonemap.setChecked(settings.tonemap_enabled)
-        self.slider_exposure.setValue(settings.exposure)
-        self.slider_contrast.setValue(settings.contrast)
-        self.slider_saturation.setValue(settings.saturation)
-        self.slider_temperature.setValue(settings.color_temperature)
-
-        self.chk_grain.setChecked(settings.grain_enabled)
-        self.slider_grain_intensity.setValue(settings.grain_intensity)
-
-        self.chk_cas.setChecked(settings.cas_enabled)
-        self.slider_cas_sharpness.setValue(settings.cas_sharpness)
+        # Instant reprocess for paused frames
         self._pipeline.reprocess_last_frame()
         self._render_viewport_tick()
 
@@ -644,13 +554,16 @@ class RealtimeRenderingTab(QWidget):
         if chosen:
             self.line_rec_dir.setText(chosen)
 
+    def _on_open_recordings_folder(self) -> None:
+        folder = Path(self.line_rec_dir.text().strip()) if self.line_rec_dir.text().strip() else OUTPUTS
+        folder.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(folder))
+
     def _on_toggle_record(self) -> None:
         if self._pipeline.recorder.is_recording:
             saved = self._pipeline.stop_recording()
             self.btn_record.setText("Start Live Recording")
-            self.btn_record.setStyleSheet(
-                "background-color: #7f1d1d; color: #fecaca; font-weight: bold; padding: 10px; border-radius: 4px; font-size: 12px;"
-            )
+            self.btn_record.setStyleSheet("background-color: #7f1d1d; color: #fecaca; font-weight: bold; padding: 10px; border-radius: 4px; font-size: 12px;")
             self.lbl_rec_status.setText("Recorder: Idle")
             self.lbl_hud_rec.setText("REC: OFF")
             self.lbl_hud_rec.setStyleSheet("color: #6b7280; font-weight: bold; font-size: 11px;")
@@ -659,48 +572,33 @@ class RealtimeRenderingTab(QWidget):
         else:
             bitrate = self.cmb_rec_bitrate.currentData() or 25
             fmt = self.cmb_rec_format.currentData() or "mp4"
-            res = self.cmb_rec_res.currentData() or (0, 0)
-            rec_dir_str = self.line_rec_dir.text().strip()
-            rec_dir = Path(rec_dir_str) if rec_dir_str else OUTPUTS
-            prefix = self.line_rec_prefix.text().strip() or "DLSS5_Live"
+            rec_dir = Path(self.line_rec_dir.text().strip()) if self.line_rec_dir.text().strip() else OUTPUTS
+            prefix = self.line_rec_prefix.text().strip() or "DLSS5_Upscale"
 
             path = self._pipeline.start_recording(
                 bitrate_mbps=bitrate,
                 format_ext=fmt,
-                target_resolution=res,
                 output_dir=rec_dir,
                 filename_prefix=prefix,
             )
             if path:
                 self.btn_record.setText("Stop Recording (REC)")
-                self.btn_record.setStyleSheet(
-                    "background-color: #dc2626; color: white; font-weight: bold; padding: 10px; border-radius: 4px; font-size: 12px;"
-                )
+                self.btn_record.setStyleSheet("background-color: #dc2626; color: white; font-weight: bold; padding: 10px; border-radius: 4px; font-size: 12px;")
                 self.lbl_rec_status.setText(f"Recording: {path.name}")
                 self.lbl_hud_rec.setText("REC: ON")
                 self.lbl_hud_rec.setStyleSheet("color: #ef4444; font-weight: bold; font-size: 11px;")
                 self.statusMessage.emit(f"Hardware live recording started: {path.name}", False)
             else:
-                QMessageBox.warning(
-                    self, "Live Recording", "Connect to an active NDI stream before starting recording."
-                )
-
-    def _on_open_recordings_folder(self) -> None:
-        rec_dir_str = self.line_rec_dir.text().strip()
-        folder = Path(rec_dir_str) if rec_dir_str else OUTPUTS
-        folder.mkdir(parents=True, exist_ok=True)
-        os.startfile(str(folder))
+                QMessageBox.warning(self, "Live Recording", "Connect to an active input stream before starting recording.")
 
     def _on_pipeline_frame_ready(self, original: np.ndarray, enhanced: np.ndarray) -> None:
         with self._frame_lock:
             self._latest_frames = (original, enhanced)
-        self.frameProduced.emit(original, enhanced)
 
     def _on_pipeline_telemetry(self, telem: PipelineTelemetry) -> None:
         self._signals.telemetryUpdated.emit(telem)
 
     def _render_viewport_tick(self) -> None:
-        """Decoupled UI viewport monitor update (~30-40 FPS) to eliminate Qt event loop stalls."""
         frames = None
         with self._frame_lock:
             if self._latest_frames is not None:
@@ -723,11 +621,14 @@ class RealtimeRenderingTab(QWidget):
 
     def _on_telemetry_gui(self, telem: PipelineTelemetry) -> None:
         wi, hi = telem.input_resolution
-        self.lbl_hud_res.setText(f"Resolution: {wi}x{hi}")
+        wo, ho = telem.output_resolution
+        if (wo, ho) != (wi, hi) and (wo > 0 and ho > 0):
+            self.lbl_hud_res.setText(f"In: {wi}x{hi} | Out: {wo}x{ho}")
+        else:
+            self.lbl_hud_res.setText(f"Resolution: {wi}x{hi}")
         self.lbl_hud_fps.setText(f"In: {telem.input_fps:.1f} FPS | Out: {telem.render_fps:.1f} FPS")
         self.lbl_hud_latency.setText(f"Latency: {telem.latency_ms:.1f} ms")
 
-        # Tally badges
         if telem.tally_program:
             self.badge_pgm.setStyleSheet("background-color: #dc2626; color: white; font-weight: bold; border-radius: 3px; font-size: 10px; padding: 2px 4px;")
         else:
@@ -752,7 +653,6 @@ class RealtimeRenderingTab(QWidget):
             self.lbl_hud_rec.setStyleSheet("color: #6b7280; font-weight: bold; font-size: 11px;")
 
     def shutdown(self) -> None:
-        """Clean shutdown on application close."""
         self._viewport_timer.stop()
         self._source_timer.stop()
         self._rec_timer.stop()
