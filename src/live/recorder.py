@@ -61,6 +61,7 @@ class LiveRecorder:
         self._bitrate_mbps = 25
         self._codec = "h264_nvenc"
         self._preset = "p4"
+        self._format_ext = "mp4"
         self._last_error = ""
 
     @property
@@ -96,22 +97,49 @@ class LiveRecorder:
         bitrate_mbps: int = 25,
         codec: str = "h264_nvenc",
         preset: str = "p4",
+        format_ext: str = "mp4",
+        output_dir: Path | None = None,
+        filename_prefix: str = "DLSS5_Live",
+        target_resolution: tuple[int, int] = (0, 0),
     ) -> Path:
-        """Start asynchronous recording session."""
+        """Start asynchronous recording session with customizable format, path, and resolution."""
         with self._lock:
             if self._is_recording:
                 raise RuntimeError("Recording session already in progress.")
 
-            self._width = width
-            self._height = height
+            # Target resolution override if specified
+            if target_resolution and target_resolution[0] > 0 and target_resolution[1] > 0:
+                self._width, self._height = target_resolution
+            else:
+                self._width = width
+                self._height = height
+
             self._fps = fps if fps > 1.0 else 60.0
             self._bitrate_mbps = bitrate_mbps
             self._codec = codec
             self._preset = preset
             self._last_error = ""
 
+            # Destination directory
+            if output_dir is not None:
+                self._output_dir = Path(output_dir)
+            self._output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Container format
+            clean_fmt = format_ext.lower().strip().lstrip(".")
+            if clean_fmt not in ("mp4", "mkv", "mov"):
+                clean_fmt = "mp4"
+            self._format_ext = clean_fmt
+
+            # Filename prefix
+            clean_prefix = filename_prefix.strip() if filename_prefix else "DLSS5_Live"
+            for ch in r'<>:"/\|?*':
+                clean_prefix = clean_prefix.replace(ch, "_")
+            if not clean_prefix:
+                clean_prefix = "DLSS5_Live"
+
             timestamp = time.strftime("%Y%m%d_%H%M%S")
-            self._current_path = self._output_dir / f"DLSS5_Live_{timestamp}.mp4"
+            self._current_path = self._output_dir / f"{clean_prefix}_{timestamp}.{self._format_ext}"
 
             self._is_recording = True
             self._start_time = time.perf_counter()
@@ -158,10 +186,13 @@ class LiveRecorder:
             "-maxrate", f"{int(self._bitrate_mbps * 1.5)}M",
             "-bufsize", f"{self._bitrate_mbps * 2}M",
             "-pix_fmt", "yuv420p",
-            # Fragmented MP4 flags: makes recording immune to abrupt termination or crashes
-            "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
-            str(self._current_path),
         ]
+
+        # Container specific flags
+        if self._format_ext in ("mp4", "mov"):
+            cmd.extend(["-movflags", "+frag_keyframe+empty_moov+default_base_moof"])
+
+        cmd.append(str(self._current_path))
 
         try:
             self._process = subprocess.Popen(

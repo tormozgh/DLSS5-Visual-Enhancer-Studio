@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -92,13 +93,13 @@ class RealtimeRenderingTab(QWidget):
         splitter.setChildrenCollapsible(False)
 
         # ----------------------------------------------------------------------
-        # LEFT COLUMN: Control Sidebar (Scrollable)
+        # RIGHT COLUMN: Control Sidebar (Scrollable)
         # ----------------------------------------------------------------------
-        left_scroll = QScrollArea()
-        left_scroll.setWidgetResizable(True)
-        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        left_scroll.setMinimumWidth(360)
-        left_scroll.setMaximumWidth(420)
+        sidebar_scroll = QScrollArea()
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        sidebar_scroll.setMinimumWidth(360)
+        sidebar_scroll.setMaximumWidth(440)
 
         sidebar = QWidget()
         sidebar_layout = QVBoxLayout(sidebar)
@@ -276,47 +277,108 @@ class RealtimeRenderingTab(QWidget):
 
         sidebar_layout.addWidget(ndi_out_box)
 
-        # 5. Instant Live NVENC Recording Card
-        rec_box = QGroupBox("Instant Live Recording")
+        # 5. Live Recording Configuration & Capture Card
+        rec_box = QGroupBox("Live Recording Settings & Control")
         rec_layout = QVBoxLayout(rec_box)
         rec_layout.setSpacing(8)
 
+        # Storage location row
+        loc_label = QLabel("Storage Location:")
+        loc_label.setStyleSheet("color: #9ca0ab; font-size: 11px;")
+        rec_layout.addWidget(loc_label)
+
+        loc_row = QHBoxLayout()
+        self.line_rec_dir = QLineEdit(str(OUTPUTS))
+        self.line_rec_dir.setStyleSheet("background-color: #17191e; border: 1px solid #282b33; border-radius: 4px; padding: 4px 8px; color: #d0d4dc; font-size: 11px;")
+        loc_row.addWidget(self.line_rec_dir, 1)
+
+        self.btn_browse_rec_dir = QPushButton("Browse")
+        self.btn_browse_rec_dir.setProperty("class", "mini-btn")
+        self.btn_browse_rec_dir.clicked.connect(self._on_browse_rec_folder)
+        loc_row.addWidget(self.btn_browse_rec_dir)
+
+        self.btn_open_folder = QPushButton("Open")
+        self.btn_open_folder.setProperty("class", "mini-btn")
+        self.btn_open_folder.clicked.connect(self._on_open_recordings_folder)
+        loc_row.addWidget(self.btn_open_folder)
+        rec_layout.addLayout(loc_row)
+
+        # File Name Prefix
+        prefix_label = QLabel("File Name Prefix:")
+        prefix_label.setStyleSheet("color: #9ca0ab; font-size: 11px;")
+        rec_layout.addWidget(prefix_label)
+
+        self.line_rec_prefix = QLineEdit("DLSS5_Live")
+        self.line_rec_prefix.setPlaceholderText("Prefix (e.g. Broadcast_Cam1)")
+        self.line_rec_prefix.setStyleSheet("background-color: #17191e; border: 1px solid #282b33; border-radius: 4px; padding: 4px 8px; color: #d0d4dc; font-size: 11px;")
+        rec_layout.addWidget(self.line_rec_prefix)
+
+        # Container Format & Output Resolution
+        fmt_res_row = QHBoxLayout()
+        fmt_res_row.setSpacing(8)
+
+        fmt_col = QVBoxLayout()
+        fmt_label = QLabel("Format:")
+        fmt_label.setStyleSheet("color: #9ca0ab; font-size: 11px;")
+        fmt_col.addWidget(fmt_label)
+        self.cmb_rec_format = QComboBox()
+        self.cmb_rec_format.addItem("MP4 (.mp4)", "mp4")
+        self.cmb_rec_format.addItem("MKV (.mkv)", "mkv")
+        self.cmb_rec_format.addItem("MOV (.mov)", "mov")
+        fmt_col.addWidget(self.cmb_rec_format)
+        fmt_res_row.addLayout(fmt_col, 1)
+
+        res_col = QVBoxLayout()
+        res_label = QLabel("Resolution:")
+        res_label.setStyleSheet("color: #9ca0ab; font-size: 11px;")
+        res_col.addWidget(res_label)
+        self.cmb_rec_res = QComboBox()
+        self.cmb_rec_res.addItem("Match Stream (Auto)", (0, 0))
+        self.cmb_rec_res.addItem("1080p FHD (1920x1080)", (1920, 1080))
+        self.cmb_rec_res.addItem("1440p 2K (2560x1440)", (2560, 1440))
+        self.cmb_rec_res.addItem("4K UHD (3840x2160)", (3840, 2160))
+        self.cmb_rec_res.addItem("720p HD (1280x720)", (1280, 720))
+        res_col.addWidget(self.cmb_rec_res)
+        fmt_res_row.addLayout(res_col, 1)
+
+        rec_layout.addLayout(fmt_res_row)
+
+        # Bitrate
+        bitrate_label = QLabel("Video Bitrate:")
+        bitrate_label.setStyleSheet("color: #9ca0ab; font-size: 11px;")
+        rec_layout.addWidget(bitrate_label)
+
+        self.cmb_rec_bitrate = QComboBox()
+        self.cmb_rec_bitrate.addItem("15 Mbps (Standard Quality)", 15)
+        self.cmb_rec_bitrate.addItem("25 Mbps (Broadcast Standard)", 25)
+        self.cmb_rec_bitrate.addItem("50 Mbps (High Bitrate Studio)", 50)
+        self.cmb_rec_bitrate.addItem("80 Mbps (Master Archive)", 80)
+        self.cmb_rec_bitrate.setCurrentIndex(1)
+        rec_layout.addWidget(self.cmb_rec_bitrate)
+
+        # Record Trigger Button
         self.btn_record = QPushButton("Start Live Recording")
         self.btn_record.setProperty("class", "record-btn")
-        self.btn_record.setStyleSheet("background-color: #7f1d1d; color: #fecaca; font-weight: bold; padding: 8px; border-radius: 4px;")
+        self.btn_record.setStyleSheet("background-color: #7f1d1d; color: #fecaca; font-weight: bold; padding: 10px; border-radius: 4px; font-size: 12px;")
         self.btn_record.clicked.connect(self._on_toggle_record)
         rec_layout.addWidget(self.btn_record)
 
-        rec_settings_row = QHBoxLayout()
-        self.cmb_rec_bitrate = QComboBox()
-        self.cmb_rec_bitrate.addItem("15 Mbps (Standard)", 15)
-        self.cmb_rec_bitrate.addItem("25 Mbps (Broadcast)", 25)
-        self.cmb_rec_bitrate.addItem("50 Mbps (Master)", 50)
-        self.cmb_rec_bitrate.setCurrentIndex(1)
-        rec_settings_row.addWidget(self.cmb_rec_bitrate)
-
-        self.btn_open_folder = QPushButton("Open Folder")
-        self.btn_open_folder.setProperty("class", "mini-btn")
-        self.btn_open_folder.clicked.connect(self._on_open_recordings_folder)
-        rec_settings_row.addWidget(self.btn_open_folder)
-        rec_layout.addLayout(rec_settings_row)
-
+        # Recording Status Label
         self.lbl_rec_status = QLabel("Recorder: Idle")
         self.lbl_rec_status.setStyleSheet("color: #9ca0ab; font-size: 11px;")
         rec_layout.addWidget(self.lbl_rec_status)
 
         sidebar_layout.addWidget(rec_box)
 
-        left_scroll.setWidget(sidebar)
-        splitter.addWidget(left_scroll)
+        sidebar_scroll.setWidget(sidebar)
 
         # ----------------------------------------------------------------------
-        # RIGHT COLUMN: Live Viewport & Telemetry HUD
+        # LEFT COLUMN: Live Viewport Canvas & Telemetry HUD
         # ----------------------------------------------------------------------
-        right_container = QWidget()
-        right_layout = QVBoxLayout(right_container)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(8)
+        viewport_container = QWidget()
+        viewport_layout = QVBoxLayout(viewport_container)
+        viewport_layout.setContentsMargins(0, 0, 0, 0)
+        viewport_layout.setSpacing(8)
 
         # Viewport Toolbar
         toolbar = QFrame()
@@ -352,11 +414,11 @@ class RealtimeRenderingTab(QWidget):
         btn_fit.clicked.connect(lambda: self.canvas.fit_to_view())
         toolbar_layout.addWidget(btn_fit)
 
-        right_layout.addWidget(toolbar)
+        viewport_layout.addWidget(toolbar)
 
         # Interactive Canvas
         self.canvas = SplitCanvas()
-        right_layout.addWidget(self.canvas, 1)
+        viewport_layout.addWidget(self.canvas, 1)
 
         # Studio Telemetry Bar (Bottom)
         hud_frame = QFrame()
@@ -388,11 +450,13 @@ class RealtimeRenderingTab(QWidget):
         self.lbl_hud_rec.setStyleSheet("color: #6b7280; font-weight: bold; font-size: 11px;")
         hud_layout.addWidget(self.lbl_hud_rec)
 
-        right_layout.addWidget(hud_frame)
+        viewport_layout.addWidget(hud_frame)
 
-        splitter.addWidget(right_container)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
+        # Add to splitter in left-to-right order: Canvas on LEFT, Sidebar on RIGHT
+        splitter.addWidget(viewport_container)
+        splitter.addWidget(sidebar_scroll)
+        splitter.setStretchFactor(0, 1)  # Left (Canvas) expands
+        splitter.setStretchFactor(1, 0)  # Right (Sidebar) fixed width
 
         root_layout.addWidget(splitter)
 
@@ -496,21 +560,47 @@ class RealtimeRenderingTab(QWidget):
         self.chk_cas.setChecked(settings.cas_enabled)
         self.slider_cas_sharpness.setValue(settings.cas_sharpness)
 
+    def _on_browse_rec_folder(self) -> None:
+        current = self.line_rec_dir.text().strip() or str(OUTPUTS)
+        chosen = QFileDialog.getExistingDirectory(self, "Select Recording Directory", current)
+        if chosen:
+            self.line_rec_dir.setText(chosen)
+
     def _on_toggle_record(self) -> None:
         if self._pipeline.recorder.is_recording:
             saved = self._pipeline.stop_recording()
             self.btn_record.setText("Start Live Recording")
-            self.btn_record.setStyleSheet("background-color: #7f1d1d; color: #fecaca; font-weight: bold; padding: 8px; border-radius: 4px;")
+            self.btn_record.setStyleSheet(
+                "background-color: #7f1d1d; color: #fecaca; font-weight: bold; padding: 10px; border-radius: 4px; font-size: 12px;"
+            )
             self.lbl_rec_status.setText("Recorder: Idle")
+            self.lbl_hud_rec.setText("REC: OFF")
+            self.lbl_hud_rec.setStyleSheet("color: #6b7280; font-weight: bold; font-size: 11px;")
             if saved and saved.is_file():
                 self.statusMessage.emit(f"Recording saved: {saved.name}", False)
         else:
             bitrate = self.cmb_rec_bitrate.currentData() or 25
-            path = self._pipeline.start_recording(bitrate_mbps=bitrate)
+            fmt = self.cmb_rec_format.currentData() or "mp4"
+            res = self.cmb_rec_res.currentData() or (0, 0)
+            rec_dir_str = self.line_rec_dir.text().strip()
+            rec_dir = Path(rec_dir_str) if rec_dir_str else OUTPUTS
+            prefix = self.line_rec_prefix.text().strip() or "DLSS5_Live"
+
+            path = self._pipeline.start_recording(
+                bitrate_mbps=bitrate,
+                format_ext=fmt,
+                target_resolution=res,
+                output_dir=rec_dir,
+                filename_prefix=prefix,
+            )
             if path:
                 self.btn_record.setText("Stop Recording (REC)")
-                self.btn_record.setStyleSheet("background-color: #dc2626; color: white; font-weight: bold; padding: 8px; border-radius: 4px;")
+                self.btn_record.setStyleSheet(
+                    "background-color: #dc2626; color: white; font-weight: bold; padding: 10px; border-radius: 4px; font-size: 12px;"
+                )
                 self.lbl_rec_status.setText(f"Recording: {path.name}")
+                self.lbl_hud_rec.setText("REC: ON")
+                self.lbl_hud_rec.setStyleSheet("color: #ef4444; font-weight: bold; font-size: 11px;")
                 self.statusMessage.emit(f"Hardware live recording started: {path.name}", False)
             else:
                 QMessageBox.warning(
@@ -518,7 +608,10 @@ class RealtimeRenderingTab(QWidget):
                 )
 
     def _on_open_recordings_folder(self) -> None:
-        os.startfile(str(OUTPUTS))
+        rec_dir_str = self.line_rec_dir.text().strip()
+        folder = Path(rec_dir_str) if rec_dir_str else OUTPUTS
+        folder.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(folder))
 
     def _on_pipeline_frame_ready(self, original: np.ndarray, enhanced: np.ndarray) -> None:
         with self._frame_lock:

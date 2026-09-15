@@ -142,12 +142,21 @@ class RealtimePipeline:
                 except Exception:
                     pass
 
-    def start_recording(self, bitrate_mbps: int = 25) -> Path | None:
-        """Start hardware live recording."""
+    def start_recording(
+        self,
+        bitrate_mbps: int = 25,
+        format_ext: str = "mp4",
+        target_resolution: tuple[int, int] = (0, 0),
+        output_dir: Path | None = None,
+        filename_prefix: str = "DLSS5_Live",
+    ) -> Path | None:
+        """Start hardware live recording with custom parameters."""
         with self._lock:
             if not self._is_running or not self._receiver:
                 return None
-            w, h = self._receiver.resolution
+            w, h = target_resolution
+            if w <= 0 or h <= 0:
+                w, h = self._receiver.resolution
             fps = self._receiver.fps or 60.0
             if self.streamline.config.enable_frame_gen:
                 fps *= 2.0
@@ -156,6 +165,10 @@ class RealtimePipeline:
                 height=h,
                 fps=fps,
                 bitrate_mbps=bitrate_mbps,
+                format_ext=format_ext,
+                output_dir=output_dir,
+                filename_prefix=filename_prefix,
+                target_resolution=target_resolution,
             )
 
     def stop_recording(self) -> Path | None:
