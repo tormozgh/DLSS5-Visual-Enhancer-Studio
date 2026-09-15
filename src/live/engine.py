@@ -148,8 +148,6 @@ class RealtimePipeline:
             if not self._is_running or not self._receiver:
                 return None
             w, h = self._receiver.resolution
-            if w <= 0 or h <= 0:
-                w, h = 1920, 1080
             fps = self._receiver.fps or 60.0
             if self.streamline.config.enable_frame_gen:
                 fps *= 2.0
