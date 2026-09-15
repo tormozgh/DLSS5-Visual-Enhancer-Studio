@@ -23,6 +23,7 @@ from src.core.reshade import ReShadeEngine
 from src.core.streamline import StreamlineHostEngine
 from src.live.ndi import NdiReceiver, NdiSender, NdiSourceFinder
 from src.live.recorder import LiveRecorder, RecorderTelemetry
+from src.live.upscaler import RealtimeNISUpscaler
 
 
 @dataclass
@@ -55,6 +56,7 @@ class RealtimePipeline:
         self.on_telemetry = on_telemetry
 
         self.streamline = StreamlineHostEngine()
+        self.upscaler = RealtimeNISUpscaler()
         self.reshade = ReShadeEngine()
         self.recorder = LiveRecorder()
         self.finder = NdiSourceFinder()
@@ -63,6 +65,10 @@ class RealtimePipeline:
         self._sender: NdiSender | None = None
         self._lock = threading.Lock()
         self._is_running = False
+
+        self._last_raw_frame: np.ndarray | None = None
+        self._last_fps: float = 60.0
+        self._last_timestamp: int = 0
 
         self._fps_tracker_time = time.perf_counter()
         self._fps_frame_count = 0
@@ -182,34 +188,44 @@ class RealtimePipeline:
         if not self._is_running:
             return
 
+        with self._lock:
+            self._last_raw_frame = original_rgba.copy()
+            self._last_fps = fps
+            self._last_timestamp = timestamp
+
         t_start = time.perf_counter()
         h, w = original_rgba.shape[:2]
 
         # 1. NVIDIA Streamline 2.13 (DLSS-NR & Frame Generation)
         enhanced_frames = self.streamline.process_frame(original_rgba, fps)
 
-        # 2. ReShade FX Post-Processing Pass
-        final_frames: list[np.ndarray] = []
+        # 2. Real-Time NVIDIA NIS Upscaling & Sharpening
+        upscaled_frames: list[np.ndarray] = []
         for frame in enhanced_frames:
+            upscaled_frames.append(self.upscaler.process(frame))
+
+        # 3. ReShade FX Post-Processing Pass
+        final_frames: list[np.ndarray] = []
+        for frame in upscaled_frames:
             shaded = self.reshade.process_frame(frame)
             final_frames.append(shaded)
 
         t_end = time.perf_counter()
         latency_ms = (t_end - t_start) * 1000.0
 
-        # 3. Output to NDI Broadcast Sender
+        # 4. Output to NDI Broadcast Sender
         sender = self._sender
         out_fps = fps * (2.0 if self.streamline.config.enable_frame_gen else 1.0)
         if sender and sender.is_broadcasting:
             for frame in final_frames:
                 sender.send_video_frame(frame, fps=out_fps)
 
-        # 4. Output to Live NVENC Recorder
+        # 5. Output to Live NVENC Recorder
         if self.recorder.is_recording:
             for frame in final_frames:
                 self.recorder.write_frame(frame)
 
-        # 5. Telemetry calculation
+        # 6. Telemetry calculation
         self._fps_frame_count += len(final_frames)
         self._total_frames += len(final_frames)
         now = time.perf_counter()
@@ -222,11 +238,12 @@ class RealtimePipeline:
 
             if self.on_telemetry:
                 prog, prev = (sender.get_tally() if sender else (False, False))
+                w_out, h_out = (final_frames[0].shape[1], final_frames[0].shape[0]) if final_frames else (w, h)
                 telem = PipelineTelemetry(
                     is_running=True,
                     source_name=self._current_source_name,
                     input_resolution=(w, h),
-                    output_resolution=(w, h),
+                    output_resolution=(w_out, h_out),
                     input_fps=fps,
                     render_fps=self._render_fps,
                     broadcast_fps=out_fps if sender else 0.0,
@@ -241,10 +258,53 @@ class RealtimePipeline:
                 except Exception:
                     pass
 
-        # 6. Emit to UI Canvas Viewport
+        # 7. Emit to UI Canvas Viewport
         if self.on_frame_ready and len(final_frames) > 0:
             try:
                 self.on_frame_ready(original_rgba, final_frames[-1])
+            except Exception:
+                pass
+
+    def reprocess_last_frame(self) -> None:
+        """Reprocess and re-emit the last received frame through the pipeline.
+
+        Ensures that when NDI input is paused (e.g. in TouchDesigner), UI parameter changes
+        (LUT, tonemap, grain, CAS, NIS upscale, sharpening) immediately update the viewport,
+        broadcast sender, and recorder without needing a new incoming NDI frame.
+        """
+        with self._lock:
+            if not self._is_running or self._last_raw_frame is None:
+                return
+            raw_copy = self._last_raw_frame.copy()
+            fps = self._last_fps
+
+        # 1. NVIDIA Streamline 2.13 (DLSS-NR)
+        enhanced_frames = self.streamline.process_frame(raw_copy, fps)
+
+        # 2. Real-Time NVIDIA NIS Upscaling & Sharpening
+        upscaled_frames: list[np.ndarray] = []
+        for frame in enhanced_frames:
+            upscaled_frames.append(self.upscaler.process(frame))
+
+        # 3. ReShade FX Post-Processing Pass
+        final_frames: list[np.ndarray] = []
+        for frame in upscaled_frames:
+            final_frames.append(self.reshade.process_frame(frame))
+
+        if not final_frames:
+            return
+
+        # Output to NDI Broadcast Sender (keeps downstream software synchronized on paused frame)
+        sender = self._sender
+        out_fps = fps * (2.0 if self.streamline.config.enable_frame_gen else 1.0)
+        if sender and sender.is_broadcasting:
+            for frame in final_frames:
+                sender.send_video_frame(frame, fps=out_fps)
+
+        # Emit to UI Canvas Viewport immediately
+        if self.on_frame_ready:
+            try:
+                self.on_frame_ready(raw_copy, final_frames[-1])
             except Exception:
                 pass
 

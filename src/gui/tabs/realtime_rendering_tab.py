@@ -167,7 +167,43 @@ class RealtimeRenderingTab(QWidget):
 
         sidebar_layout.addWidget(sl_box)
 
-        # 3. ReShade FX Post-Processing Card
+        # 3. Real-Time NVIDIA NIS Upscaling & Directional Sharpening Card
+        nis_box = QGroupBox("Real-Time Upscaling & Sharpening (NVIDIA NIS)")
+        nis_layout = QVBoxLayout(nis_box)
+        nis_layout.setSpacing(8)
+
+        self.chk_nis_enabled = QCheckBox("Enable Real-Time NIS Upscaling")
+        self.chk_nis_enabled.setChecked(False)
+        self.chk_nis_enabled.toggled.connect(self._on_nis_config_changed)
+        nis_layout.addWidget(self.chk_nis_enabled)
+
+        mode_row = QHBoxLayout()
+        mode_label = QLabel("Scale / Target:")
+        mode_label.setStyleSheet("color: #9ca0ab; font-size: 11px;")
+        mode_row.addWidget(mode_label)
+
+        self.cmb_nis_mode = QComboBox()
+        self.cmb_nis_mode.addItem("1.5x Quality (720p->1080p / 1080p->1620p)", ("scale", 1.5, (0, 0)))
+        self.cmb_nis_mode.addItem("2.0x Ultra Quality (1080p->4K UHD)", ("scale", 2.0, (0, 0)))
+        self.cmb_nis_mode.addItem("Target 1440p 2K (2560x1440)", ("fit", 1.0, (2560, 1440)))
+        self.cmb_nis_mode.addItem("Target 4K UHD (3840x2160)", ("fit", 1.0, (3840, 2160)))
+        self.cmb_nis_mode.addItem("1.25x Balanced", ("scale", 1.25, (0, 0)))
+        self.cmb_nis_mode.addItem("Native Resolution + Sharpening Only", ("scale", 1.0, (0, 0)))
+        self.cmb_nis_mode.currentIndexChanged.connect(self._on_nis_config_changed)
+        mode_row.addWidget(self.cmb_nis_mode, 1)
+        nis_layout.addLayout(mode_row)
+
+        self.slider_nis_sharpness = LabeledSlider("NIS Directional Sharpness", 0.0, 1.0, 0.50, step=0.05, decimals=2)
+        self.slider_nis_sharpness.valueChanged.connect(self._on_nis_config_changed)
+        nis_layout.addWidget(self.slider_nis_sharpness)
+
+        self.lbl_nis_tag = QLabel("Engine: NVIDIA Image Scaling (Directional Filter + Anti-Ringing)")
+        self.lbl_nis_tag.setStyleSheet("color: #7b8190; font-size: 10px;")
+        nis_layout.addWidget(self.lbl_nis_tag)
+
+        sidebar_layout.addWidget(nis_box)
+
+        # 4. ReShade FX Post-Processing Card
         rs_box = QGroupBox("ReShade FX Post-Processing")
         rs_layout = QVBoxLayout(rs_box)
         rs_layout.setSpacing(8)
@@ -440,7 +476,7 @@ class RealtimeRenderingTab(QWidget):
         self.lbl_hud_latency.setStyleSheet("color: #4ade80; font-weight: 600; font-size: 11px;")
         hud_layout.addWidget(self.lbl_hud_latency)
 
-        self.lbl_hud_pipeline = QLabel("Engine: Streamline 2.13 + ReShade FX")
+        self.lbl_hud_pipeline = QLabel("Engine: Streamline 2.13 + NIS + ReShade FX")
         self.lbl_hud_pipeline.setStyleSheet("color: #9ca0ab; font-size: 11px;")
         hud_layout.addWidget(self.lbl_hud_pipeline)
 
@@ -516,6 +552,21 @@ class RealtimeRenderingTab(QWidget):
         cfg.enable_frame_gen = self.chk_sl_frame_gen.isChecked()
         cfg.nr_intensity = float(self.slider_nr_intensity.value())
         cfg.nr_structure = float(self.slider_nr_structure.value())
+        self._pipeline.reprocess_last_frame()
+        self._render_viewport_tick()
+
+    def _on_nis_config_changed(self) -> None:
+        cfg = self._pipeline.upscaler.config
+        cfg.enabled = self.chk_nis_enabled.isChecked()
+        mode_data = self.cmb_nis_mode.currentData()
+        if mode_data:
+            mode_type, scale_val, target_res = mode_data
+            cfg.scale_mode = mode_type
+            cfg.scale_factor = scale_val
+            cfg.target_resolution = target_res
+        cfg.sharpness = float(self.slider_nis_sharpness.value())
+        self._pipeline.reprocess_last_frame()
+        self._render_viewport_tick()
 
     def _on_rs_config_changed(self) -> None:
         s = self._pipeline.reshade.settings
@@ -535,6 +586,8 @@ class RealtimeRenderingTab(QWidget):
 
         s.cas_enabled = self.chk_cas.isChecked()
         s.cas_sharpness = float(self.slider_cas_sharpness.value())
+        self._pipeline.reprocess_last_frame()
+        self._render_viewport_tick()
 
     def _on_preset_selected(self, preset_name: str) -> None:
         if not preset_name:
@@ -559,6 +612,8 @@ class RealtimeRenderingTab(QWidget):
 
         self.chk_cas.setChecked(settings.cas_enabled)
         self.slider_cas_sharpness.setValue(settings.cas_sharpness)
+        self._pipeline.reprocess_last_frame()
+        self._render_viewport_tick()
 
     def _on_browse_rec_folder(self) -> None:
         current = self.line_rec_dir.text().strip() or str(OUTPUTS)
@@ -643,8 +698,12 @@ class RealtimeRenderingTab(QWidget):
         self.canvas.set_images(qimg_before, qimg_after)
 
     def _on_telemetry_gui(self, telem: PipelineTelemetry) -> None:
-        w, h = telem.input_resolution
-        self.lbl_hud_res.setText(f"Resolution: {w}x{h}")
+        wi, hi = telem.input_resolution
+        wo, ho = telem.output_resolution
+        if (wo, ho) != (wi, hi) and (wo > 0 and ho > 0):
+            self.lbl_hud_res.setText(f"In: {wi}x{hi} | Out: {wo}x{ho} (NIS)")
+        else:
+            self.lbl_hud_res.setText(f"Resolution: {wi}x{hi}")
         self.lbl_hud_fps.setText(f"In: {telem.input_fps:.1f} FPS | Out: {telem.render_fps:.1f} FPS")
         self.lbl_hud_latency.setText(f"Latency: {telem.latency_ms:.1f} ms")
 
