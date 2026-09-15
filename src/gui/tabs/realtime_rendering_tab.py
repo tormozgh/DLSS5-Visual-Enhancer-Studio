@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -49,10 +50,12 @@ class RealtimeRenderingTab(QWidget):
         super().__init__(parent)
         self._settings = settings
         self._signals = _SignalBridge()
-        self._signals.frameReady.connect(self._on_frame_ready_gui)
         self._signals.telemetryUpdated.connect(self._on_telemetry_gui)
 
         self._preset_manager = ReShadePresetManager()
+        self._frame_lock = threading.Lock()
+        self._latest_frames: tuple[np.ndarray, np.ndarray] | None = None
+
         self._pipeline = RealtimePipeline(
             sender_name="DLSS 5 Visual Enhancer Studio",
             on_frame_ready=self._on_pipeline_frame_ready,
@@ -61,6 +64,12 @@ class RealtimeRenderingTab(QWidget):
 
         self._init_ui()
         self._refresh_sources_list()
+
+        # Viewport render timer (decoupled from 60+ FPS broadcast loop)
+        self._viewport_timer = QTimer(self)
+        self._viewport_timer.setInterval(25)  # 40 FPS UI monitor refresh
+        self._viewport_timer.timeout.connect(self._render_viewport_tick)
+        self._viewport_timer.start()
 
         # Periodic timer to refresh sources in dropdown
         self._source_timer = QTimer(self)
@@ -512,19 +521,31 @@ class RealtimeRenderingTab(QWidget):
         os.startfile(str(OUTPUTS))
 
     def _on_pipeline_frame_ready(self, original: np.ndarray, enhanced: np.ndarray) -> None:
-        self._signals.frameReady.emit(original, enhanced)
+        with self._frame_lock:
+            self._latest_frames = (original, enhanced)
 
     def _on_pipeline_telemetry(self, telem: PipelineTelemetry) -> None:
         self._signals.telemetryUpdated.emit(telem)
 
-    def _on_frame_ready_gui(self, orig: np.ndarray, enh: np.ndarray) -> None:
+    def _render_viewport_tick(self) -> None:
+        """Decoupled UI viewport monitor update (~30-40 FPS) to eliminate Qt event loop stalls."""
+        frames = None
+        with self._frame_lock:
+            if self._latest_frames is not None:
+                frames = self._latest_frames
+                self._latest_frames = None
+
+        if frames is None:
+            return
+
+        orig, enh = frames
         ho, wo = orig.shape[:2]
-        stride_o = orig.strides[0]
-        qimg_before = QImage(orig.data, wo, ho, stride_o, QImage.Format.Format_RGBA8888).copy()
+        stride_o = int(orig.strides[0])
+        qimg_before = QImage(orig.data, wo, ho, stride_o, QImage.Format.Format_RGBA8888)
 
         he, we = enh.shape[:2]
-        stride_e = enh.strides[0]
-        qimg_after = QImage(enh.data, we, he, stride_e, QImage.Format.Format_RGBA8888).copy()
+        stride_e = int(enh.strides[0])
+        qimg_after = QImage(enh.data, we, he, stride_e, QImage.Format.Format_RGBA8888)
 
         self.canvas.set_images(qimg_before, qimg_after)
 
@@ -560,6 +581,7 @@ class RealtimeRenderingTab(QWidget):
 
     def shutdown(self) -> None:
         """Clean shutdown on application close."""
+        self._viewport_timer.stop()
         self._source_timer.stop()
         self._rec_timer.stop()
         self._pipeline.close()

@@ -97,7 +97,10 @@ class NdiSender:
             frame.p_metadata = None
             frame.timestamp = 0
 
-            lib.NDIlib_send_send_video_v2(self._instance, ctypes.byref(frame))
+            # Retain reference to keep buffer valid in memory until next frame is dispatched
+            self._last_sent_frame = rgba_frame
+
+            lib.NDIlib_send_send_video_async_v2(self._instance, ctypes.byref(frame))
             self._frame_count += 1
 
     def get_tally(self) -> tuple[bool, bool]:

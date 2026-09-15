@@ -3,7 +3,16 @@ from __future__ import annotations
 import traceback
 from pathlib import Path
 
-import gradio as gr
+try:
+    import gradio as gr
+except ImportError:
+    class _DummyProgress:
+        def __init__(self, *args, **kwargs): pass
+        def __call__(self, *args, **kwargs): pass
+    class _DummyGradio:
+        Progress = _DummyProgress
+        Error = RuntimeError
+    gr = _DummyGradio()  # type: ignore
 
 from ..core.ffmpeg import probe_video
 from ..core.ffmpeg.preview import (

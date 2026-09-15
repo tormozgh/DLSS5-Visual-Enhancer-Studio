@@ -3,7 +3,16 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-import gradio as gr
+try:
+    import gradio as gr
+except ImportError:
+    class _DummyProgress:
+        def __init__(self, *args, **kwargs): pass
+        def __call__(self, *args, **kwargs): pass
+    class _DummyGradio:
+        Progress = _DummyProgress
+        Error = RuntimeError
+    gr = _DummyGradio()  # type: ignore
 
 from ...core.ffmpeg.preview import is_browser_playable, make_browser_preview
 from ...settings.storage import current_preview_encoding
