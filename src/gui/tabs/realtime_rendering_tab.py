@@ -79,6 +79,12 @@ class RealtimeRenderingTab(QWidget):
         self._source_timer.timeout.connect(self._refresh_sources_list)
         self._source_timer.start()
 
+        # Camera auto-refresh timer (instant registry check)
+        self._cam_timer = QTimer(self)
+        self._cam_timer.setInterval(2000)
+        self._cam_timer.timeout.connect(self._auto_refresh_cameras)
+        self._cam_timer.start()
+
         # Telemetry timer for recording duration update
         self._rec_timer = QTimer(self)
         self._rec_timer.setInterval(500)
@@ -522,12 +528,37 @@ class RealtimeRenderingTab(QWidget):
 
     def _refresh_cameras_list(self) -> None:
         cameras = self._pipeline.get_cameras()
+        current = self.cmb_cameras.currentData()
+        self.cmb_cameras.blockSignals(True)
         self.cmb_cameras.clear()
         if not cameras:
             self.cmb_cameras.addItem("No video capture devices found", None)
         else:
             for cam in cameras:
                 self.cmb_cameras.addItem(cam.display_name, cam.index)
+                if cam.index == current:
+                    self.cmb_cameras.setCurrentIndex(self.cmb_cameras.count() - 1)
+        self.cmb_cameras.blockSignals(False)
+
+    def _auto_refresh_cameras(self) -> None:
+        """Periodic background refresh to detect newly connected webcams instantly."""
+        if self.cmb_input_type.currentData() != "webcam":
+            return
+        cameras = self._pipeline.get_cameras()
+        current = self.cmb_cameras.currentData()
+        items = [(cam.display_name, cam.index) for cam in cameras]
+        existing = [(self.cmb_cameras.itemText(i), self.cmb_cameras.itemData(i)) for i in range(self.cmb_cameras.count())]
+        if items != existing:
+            self.cmb_cameras.blockSignals(True)
+            self.cmb_cameras.clear()
+            if not items:
+                self.cmb_cameras.addItem("No video capture devices found", None)
+            else:
+                for name, idx in items:
+                    self.cmb_cameras.addItem(name, idx)
+                    if idx == current:
+                        self.cmb_cameras.setCurrentIndex(self.cmb_cameras.count() - 1)
+            self.cmb_cameras.blockSignals(False)
 
     def _on_toggle_stream(self) -> None:
         if self._pipeline.is_running:
@@ -755,5 +786,6 @@ class RealtimeRenderingTab(QWidget):
         """Clean shutdown on application close."""
         self._viewport_timer.stop()
         self._source_timer.stop()
+        self._cam_timer.stop()
         self._rec_timer.stop()
         self._pipeline.close()

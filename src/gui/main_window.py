@@ -108,7 +108,7 @@ class MainWindow(QMainWindow):
         self.tab_interpolation.statusMessage.connect(self.telemetry.set_status)
         self.tab_realtime.statusMessage.connect(self.telemetry.set_status)
         self.tab_rt_upscale.statusMessage.connect(self.telemetry.set_status)
-        self.tab_realtime.frameProduced.connect(self.tab_rt_upscale.feed_internal_frame)
+        self.tab_realtime.frameProduced.connect(self.tab_rt_upscale.feed_internal_frame, Qt.ConnectionType.DirectConnection)
         self.tab_settings.settingsSaved.connect(self._on_settings_saved)
 
     def _on_settings_saved(self) -> None:

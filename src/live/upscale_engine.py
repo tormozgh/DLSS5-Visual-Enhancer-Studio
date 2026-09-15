@@ -1,87 +1,80 @@
-"""Real-Time Rendering Master Pipeline Coordinator.
+"""Dedicated Real-Time Upscale Pipeline Coordinator.
 
-Glues together:
-- NDI 6 Receiver (Network Ingest)
-- NVIDIA Streamline 2.13 Engine (DLSS-NR + Optical Flow + DLSS-G Frame Gen)
-- ReShade FX Engine (3D LUTs + Film Grain + ACES + CAS)
-- NDI 6 Broadcast Sender ('DLSS 5 Visual Enhancer Studio' + Tally)
-- Asynchronous NVENC Live Hardware Recorder
-- Viewport callback emitters for PyQt6 Canvas
+Decoupled execution engine dedicated strictly to spatial edge upscaling and directional
+sharpening (NVIDIA NIS / CAS / Catmull-Rom Bicubic). 
+
+Architecture Isolation:
+- Strictly independent from StreamlineHostEngine and ReShadeEngine.
+- Ingests RAW NDI, DirectShow Webcams/Capture Cards, or In-Memory Internal Render feed.
+- Non-blocking atomic frame handoff for Internal feed (zero memory accumulation, zero drop cascade).
+- Full hardware NVENC recording locked to upscaled target resolution (e.g. 4K UHD).
+- Low-latency NDI 6 Broadcast sender.
 """
 
 from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 import numpy as np
 
-from src.core.reshade import ReShadeEngine
-from src.core.streamline import StreamlineHostEngine
 from src.live.camera import CameraDeviceInfo, WebcamReceiver
+from src.live.engine import PipelineTelemetry
 from src.live.ndi import NdiReceiver, NdiSender, NdiSourceFinder
 from src.live.recorder import LiveRecorder, RecorderTelemetry
 from src.live.upscaler import RealtimeNISUpscaler
 
 
-@dataclass
-class PipelineTelemetry:
-    is_running: bool = False
-    source_name: str = "None"
-    input_resolution: tuple[int, int] = (0, 0)
-    output_resolution: tuple[int, int] = (0, 0)
-    input_fps: float = 0.0
-    render_fps: float = 0.0
-    broadcast_fps: float = 0.0
-    latency_ms: float = 0.0
-    frame_count: int = 0
-    tally_program: bool = False
-    tally_preview: bool = False
-    recorder: RecorderTelemetry = field(default_factory=RecorderTelemetry)
-
-
-class RealtimePipeline:
-    """Master real-time rendering and broadcast pipeline."""
+class RealtimeUpscalePipeline:
+    """Dedicated low-latency pipeline coordinator for Real-Time Upscale Studio."""
 
     def __init__(
         self,
-        sender_name: str = "DLSS 5 Visual Enhancer Studio",
+        sender_name: str = "DLSS 5 Real-Time Upscale Studio",
         on_frame_ready: Callable[[np.ndarray, np.ndarray], None] | None = None,
         on_telemetry: Callable[[PipelineTelemetry], None] | None = None,
     ) -> None:
         self.sender_name = sender_name
-        self.on_frame_ready = on_frame_ready  # (original_rgba, enhanced_rgba)
+        self.on_frame_ready = on_frame_ready  # (original_rgba, upscaled_rgba)
         self.on_telemetry = on_telemetry
 
-        self.streamline = StreamlineHostEngine()
         self.upscaler = RealtimeNISUpscaler()
-        self.reshade = ReShadeEngine()
         self.recorder = LiveRecorder()
         self.finder = NdiSourceFinder()
 
         self._receiver: NdiReceiver | None = None
         self._camera_receiver: WebcamReceiver | None = None
         self._sender: NdiSender | None = None
+
         self._lock = threading.Lock()
         self._is_running = False
-        self._source_type = "ndi"
+        self._source_type = "internal"  # 'internal', 'ndi', 'webcam'
+        self._current_source_name = "None"
+        self._current_url: str | None = None
 
+        # Internal feed thread-safe atomic buffer
+        self._internal_lock = threading.Lock()
+        self._pending_internal_frame: tuple[np.ndarray, np.ndarray] | None = None
+        self._internal_event = threading.Event()
+        self._internal_thread: threading.Thread | None = None
+
+        # Telemetry and state tracking
         self._last_raw_frame: np.ndarray | None = None
+        self._last_upscaled_frame: np.ndarray | None = None
         self._last_fps: float = 60.0
         self._last_timestamp: int = 0
+        self._last_dimensions: tuple[int, int] = (1920, 1080)
 
         self._fps_tracker_time = time.perf_counter()
         self._fps_frame_count = 0
         self._render_fps = 0.0
         self._last_latency = 0.0
         self._total_frames = 0
-        self._current_source_name = "None"
-        self._current_url: str | None = None
 
-        # Start background finder so available streams are ready in UI
+        # Start NDI discovery in background
         self.finder.start()
 
     @property
@@ -97,13 +90,13 @@ class RealtimePipeline:
         """Return discovered video capture hardware devices."""
         return WebcamReceiver.list_cameras()
 
-    def start_pipeline(
+    def start_ndi_pipeline(
         self,
         source_name: str,
         url_address: str | None = None,
         enable_ndi_out: bool = True,
     ) -> None:
-        """Start ingesting from NDI source and executing real-time pipeline."""
+        """Start ingesting from RAW NDI stream with isolated upscaling."""
         with self._lock:
             if self._is_running:
                 self.stop_pipeline()
@@ -116,14 +109,12 @@ class RealtimePipeline:
             self._fps_frame_count = 0
             self._total_frames = 0
 
-            # 1. Setup NDI Sender if broadcasting enabled
             if enable_ndi_out:
                 self._sender = NdiSender(self.sender_name)
                 self._sender.start()
             else:
                 self._sender = None
 
-            # 2. Setup NDI Receiver
             self._receiver = NdiReceiver(
                 source_name=source_name,
                 url_address=url_address,
@@ -144,7 +135,15 @@ class RealtimePipeline:
             if self._is_running:
                 self.stop_pipeline()
 
-            self._current_source_name = f"Camera {device_index}"
+            # Find friendly camera name
+            cams = WebcamReceiver.list_cameras()
+            cam_name = f"Camera {device_index}"
+            for c in cams:
+                if c.index == device_index:
+                    cam_name = c.name
+                    break
+
+            self._current_source_name = cam_name
             self._source_type = "webcam"
             self._is_running = True
             self._fps_tracker_time = time.perf_counter()
@@ -168,10 +167,10 @@ class RealtimePipeline:
 
     def start_internal_pipeline(
         self,
-        source_name: str = "Real-Time Rendering Output",
+        source_name: str = "Real-Time Rendering Feed",
         enable_ndi_out: bool = True,
     ) -> None:
-        """Start in-memory ingestion directly from another pipeline stage."""
+        """Start non-blocking internal in-memory feed ingestion."""
         with self._lock:
             if self._is_running:
                 self.stop_pipeline()
@@ -189,18 +188,60 @@ class RealtimePipeline:
             else:
                 self._sender = None
 
+            self._internal_event.clear()
+            self._internal_thread = threading.Thread(
+                target=self._internal_worker_loop,
+                name="dlss5-internal-feed-worker",
+                daemon=True,
+            )
+            self._internal_thread.start()
+
     def feed_internal_frame(self, original_rgba: np.ndarray, enhanced_rgba: np.ndarray) -> None:
-        """Direct in-memory frame pushing from another pipeline."""
+        """Atomic non-blocking frame deposit from Real-Time Rendering tab.
+        
+        Zero copy overhead and zero queue growth: replaces any waiting unconsumed
+        frame in O(1) time without blocking the caller thread.
+        """
         if not self._is_running or self._source_type != "internal":
             return
-        now = time.perf_counter()
-        ts = int(now * 1000)
-        self._on_incoming_video_frame(enhanced_rgba, ts, 60.0)
+
+        with self._internal_lock:
+            self._pending_internal_frame = (original_rgba, enhanced_rgba)
+        self._internal_event.set()
+
+    def _internal_worker_loop(self) -> None:
+        """Dedicated consumer thread for internal in-memory frames."""
+        while self._is_running and self._source_type == "internal":
+            signaled = self._internal_event.wait(timeout=0.033)
+            if not self._is_running or self._source_type != "internal":
+                break
+
+            pair = None
+            with self._internal_lock:
+                if self._pending_internal_frame is not None:
+                    pair = self._pending_internal_frame
+                    self._pending_internal_frame = None
+                self._internal_event.clear()
+
+            if pair is not None:
+                orig, enh = pair
+                now = time.perf_counter()
+                ts = int(now * 1000)
+                # Process the rendered frame through upscaling
+                self._process_frame_core(enh, orig, ts, 60.0)
 
     def stop_pipeline(self) -> None:
-        """Stop receiver, webcam, sender, and recording."""
+        """Stop all receivers, workers, senders, and active recordings."""
         with self._lock:
             self._is_running = False
+
+            if self._internal_thread and self._internal_thread.is_alive():
+                self._internal_event.set()
+                self._internal_thread.join(timeout=0.5)
+                self._internal_thread = None
+
+            with self._internal_lock:
+                self._pending_internal_frame = None
 
             if self._receiver:
                 try:
@@ -233,89 +274,78 @@ class RealtimePipeline:
         self,
         bitrate_mbps: int = 25,
         format_ext: str = "mp4",
-        target_resolution: tuple[int, int] = (0, 0),
         output_dir: Path | None = None,
-        filename_prefix: str = "DLSS5_Live",
+        filename_prefix: str = "DLSS5_Upscale",
     ) -> Path | None:
-        """Start hardware live recording with custom parameters."""
+        """Start hardware NVENC recording locked to the upscaled resolution."""
         with self._lock:
             if not self._is_running:
                 return None
-            w, h = target_resolution
-            if w <= 0 or h <= 0:
-                if self._receiver:
-                    w, h = self._receiver.resolution
-                elif self._camera_receiver:
-                    w, h = self._camera_receiver.resolution
-                elif self._last_raw_frame is not None:
-                    h, w = self._last_raw_frame.shape[:2]
-                else:
-                    w, h = (1920, 1080)
+
+            in_w, in_h = self._last_dimensions
+            target_w, target_h = self.upscaler.calculate_target_dimensions(in_w, in_h)
             fps = self._last_fps if self._last_fps > 10.0 else 60.0
-            if self.streamline.config.enable_frame_gen:
-                fps *= 2.0
+
             return self.recorder.start(
-                width=w,
-                height=h,
+                width=target_w,
+                height=target_h,
                 fps=fps,
                 bitrate_mbps=bitrate_mbps,
                 format_ext=format_ext,
                 output_dir=output_dir,
                 filename_prefix=filename_prefix,
-                target_resolution=target_resolution,
+                target_resolution=(target_w, target_h),
             )
 
     def stop_recording(self) -> Path | None:
-        """Stop hardware live recording."""
+        """Stop live recording and finalize file."""
         return self.recorder.stop()
 
-    def _on_incoming_video_frame(
-        self, original_rgba: np.ndarray, timestamp: int, fps: float
-    ) -> None:
-        """Main real-time processing loop triggered on each NDI video frame."""
+    def _on_incoming_video_frame(self, raw_rgba: np.ndarray, timestamp: int, fps: float) -> None:
+        """Callback from NdiReceiver or WebcamReceiver."""
         if not self._is_running:
             return
+        self._process_frame_core(raw_rgba, raw_rgba, timestamp, fps)
+
+    def _process_frame_core(
+        self,
+        process_rgba: np.ndarray,
+        comparison_original_rgba: np.ndarray,
+        timestamp: int,
+        fps: float,
+    ) -> None:
+        """High-performance core upscaling loop."""
+        in_h, in_w = process_rgba.shape[:2]
+        self._last_dimensions = (in_w, in_h)
 
         with self._lock:
-            self._last_raw_frame = original_rgba.copy()
+            self._last_raw_frame = process_rgba
             self._last_fps = fps
             self._last_timestamp = timestamp
 
         t_start = time.perf_counter()
-        h, w = original_rgba.shape[:2]
 
-        # 1. NVIDIA Streamline 2.13 (DLSS-NR & Frame Generation)
-        enhanced_frames = self.streamline.process_frame(original_rgba, fps)
-
-        # 2. Real-Time NVIDIA NIS Upscaling & Sharpening
-        upscaled_frames: list[np.ndarray] = []
-        for frame in enhanced_frames:
-            upscaled_frames.append(self.upscaler.process(frame))
-
-        # 3. ReShade FX Post-Processing Pass
-        final_frames: list[np.ndarray] = []
-        for frame in upscaled_frames:
-            shaded = self.reshade.process_frame(frame)
-            final_frames.append(shaded)
+        # Real-Time Spatial Upscale & Directional Sharpening (NIS / CAS / Bicubic)
+        upscaled = self.upscaler.process(process_rgba)
 
         t_end = time.perf_counter()
         latency_ms = (t_end - t_start) * 1000.0
 
-        # 4. Output to NDI Broadcast Sender
+        with self._lock:
+            self._last_upscaled_frame = upscaled
+
+        # 1. Output to NDI Broadcast Sender
         sender = self._sender
-        out_fps = fps * (2.0 if self.streamline.config.enable_frame_gen else 1.0)
         if sender and sender.is_broadcasting:
-            for frame in final_frames:
-                sender.send_video_frame(frame, fps=out_fps)
+            sender.send_video_frame(upscaled, fps=fps)
 
-        # 5. Output to Live NVENC Recorder
+        # 2. Output to Hardware NVENC Live Recorder at UPSCALED Resolution
         if self.recorder.is_recording:
-            for frame in final_frames:
-                self.recorder.write_frame(frame)
+            self.recorder.write_frame(upscaled)
 
-        # 6. Telemetry calculation
-        self._fps_frame_count += len(final_frames)
-        self._total_frames += len(final_frames)
+        # 3. Telemetry Tracking
+        self._fps_frame_count += 1
+        self._total_frames += 1
         now = time.perf_counter()
         dt = now - self._fps_tracker_time
         if dt >= 0.5:
@@ -326,77 +356,34 @@ class RealtimePipeline:
 
             if self.on_telemetry:
                 prog, prev = (sender.get_tally() if sender else (False, False))
-                w_out, h_out = (final_frames[0].shape[1], final_frames[0].shape[0]) if final_frames else (w, h)
+                out_h, out_w = upscaled.shape[:2]
                 telem = PipelineTelemetry(
                     is_running=True,
                     source_name=self._current_source_name,
-                    input_resolution=(w, h),
-                    output_resolution=(w_out, h_out),
+                    input_resolution=(in_w, in_h),
+                    output_resolution=(out_w, out_h),
                     input_fps=fps,
                     render_fps=self._render_fps,
-                    broadcast_fps=out_fps if sender else 0.0,
+                    broadcast_fps=fps if sender else 0.0,
                     latency_ms=self._last_latency,
                     frame_count=self._total_frames,
                     tally_program=prog,
                     tally_preview=prev,
                     recorder=self.recorder.get_telemetry(),
                 )
-                try:
-                    self.on_telemetry(telem)
-                except Exception:
-                    pass
+                self.on_telemetry(telem)
 
-        # 7. Emit to UI Canvas Viewport
-        if self.on_frame_ready and len(final_frames) > 0:
-            try:
-                self.on_frame_ready(original_rgba, final_frames[-1])
-            except Exception:
-                pass
+        # 4. Viewport emit for SplitCanvas (original vs upscaled)
+        if self.on_frame_ready:
+            self.on_frame_ready(comparison_original_rgba, upscaled)
 
     def reprocess_last_frame(self) -> None:
-        """Reprocess and re-emit the last received frame through the pipeline.
-
-        Ensures that when NDI input is paused (e.g. in TouchDesigner), UI parameter changes
-        (LUT, tonemap, grain, CAS, NIS upscale, sharpening) immediately update the viewport,
-        broadcast sender, and recorder without needing a new incoming NDI frame.
-        """
-        with self._lock:
-            if not self._is_running or self._last_raw_frame is None:
-                return
-            raw_copy = self._last_raw_frame.copy()
-            fps = self._last_fps
-
-        # 1. NVIDIA Streamline 2.13 (DLSS-NR)
-        enhanced_frames = self.streamline.process_frame(raw_copy, fps)
-
-        # 2. Real-Time NVIDIA NIS Upscaling & Sharpening
-        upscaled_frames: list[np.ndarray] = []
-        for frame in enhanced_frames:
-            upscaled_frames.append(self.upscaler.process(frame))
-
-        # 3. ReShade FX Post-Processing Pass
-        final_frames: list[np.ndarray] = []
-        for frame in upscaled_frames:
-            final_frames.append(self.reshade.process_frame(frame))
-
-        if not final_frames:
-            return
-
-        # Output to NDI Broadcast Sender (keeps downstream software synchronized on paused frame)
-        sender = self._sender
-        out_fps = fps * (2.0 if self.streamline.config.enable_frame_gen else 1.0)
-        if sender and sender.is_broadcasting:
-            for frame in final_frames:
-                sender.send_video_frame(frame, fps=out_fps)
-
-        # Emit to UI Canvas Viewport immediately
-        if self.on_frame_ready:
-            try:
-                self.on_frame_ready(raw_copy, final_frames[-1])
-            except Exception:
-                pass
+        """Reprocess current frame when paused or changing parameters."""
+        raw = self._last_raw_frame
+        if raw is not None:
+            self._process_frame_core(raw, raw, self._last_timestamp, self._last_fps)
 
     def close(self) -> None:
-        """Full cleanup."""
+        """Cleanly terminate pipeline and background resources."""
         self.stop_pipeline()
         self.finder.stop()

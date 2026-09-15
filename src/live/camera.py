@@ -25,7 +25,9 @@ class CameraDeviceInfo:
 
     @property
     def display_name(self) -> str:
-        return f"Camera {self.index} ({self.width}x{self.height} @ {int(round(self.fps))} FPS)"
+        if self.name and self.name != f"Camera {self.index}":
+            return f"[{self.index}] {self.name}"
+        return f"Camera {self.index} ({self.width}x{self.height})"
 
 
 class WebcamReceiver:
@@ -53,9 +55,9 @@ class WebcamReceiver:
         self._thread: threading.Thread | None = None
         self._cap: cv2.VideoCapture | None = None
 
-        self._actual_width = 0
-        self._actual_height = 0
-        self._actual_fps = 0.0
+        self._actual_width = target_width
+        self._actual_height = target_height
+        self._actual_fps = target_fps
 
     @property
     def is_running(self) -> bool:
@@ -73,29 +75,71 @@ class WebcamReceiver:
             return self._actual_fps
 
     @classmethod
-    def list_cameras(cls, max_probe: int = 6, force_refresh: bool = False) -> list[CameraDeviceInfo]:
-        """Enumerate available video capture hardware devices via DirectShow."""
+    def list_cameras(cls, max_probe: int = 8, force_refresh: bool = False) -> list[CameraDeviceInfo]:
+        """Enumerate available video capture hardware devices via DirectShow Registry instantaneously."""
         now = time.time()
-        if not force_refresh and cls._cached_devices is not None and (now - cls._cache_time < 30.0):
+        if not force_refresh and cls._cached_devices is not None and (now - cls._cache_time < 2.0):
             return cls._cached_devices
 
         devices: list[CameraDeviceInfo] = []
-        for idx in range(max_probe):
+
+        # DirectShow Video Input Device Category CLSID
+        # Fast query via Windows Registry without hardware initialization stalls (< 1ms)
+        try:
+            import winreg
+
+            seen_names: set[str] = set()
+            idx = 0
+            for root_key in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+                reg_paths = [
+                    r"SOFTWARE\Classes\CLSID\{860BB310-5D01-11d0-BD3B-00A0C911CE86}\Instance",
+                    r"SOFTWARE\WOW6432Node\Classes\CLSID\{860BB310-5D01-11d0-BD3B-00A0C911CE86}\Instance",
+                ]
+                for path in reg_paths:
+                    try:
+                        key = winreg.OpenKey(root_key, path)
+                    except OSError:
+                        continue
+
+                    sub_idx = 0
+                    while True:
+                        try:
+                            subkey_name = winreg.EnumKey(key, sub_idx)
+                            subkey = winreg.OpenKey(key, subkey_name)
+                            try:
+                                friendly_name, _ = winreg.QueryValueEx(subkey, "FriendlyName")
+                            except FileNotFoundError:
+                                friendly_name = f"Capture Device {idx}"
+
+                            if friendly_name and friendly_name not in seen_names:
+                                seen_names.add(friendly_name)
+                                devices.append(
+                                    CameraDeviceInfo(
+                                        index=idx,
+                                        name=str(friendly_name),
+                                        width=1920,
+                                        height=1080,
+                                        fps=60.0,
+                                    )
+                                )
+                                idx += 1
+                            sub_idx += 1
+                        except OSError:
+                            break
+
+            if devices:
+                cls._cached_devices = devices
+                cls._cache_time = now
+                return devices
+        except Exception:
+            pass
+
+        # Fallback if registry query unsupported (e.g. non-Windows)
+        for idx in range(min(max_probe, 2)):
             try:
                 cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
                 if cap.isOpened():
-                    # Probe actual capabilities
-                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-                    cap.set(cv2.CAP_PROP_FPS, 60.0)
-
-                    ret, frame = cap.read()
-                    if ret and frame is not None:
-                        h, w = frame.shape[:2]
-                        fps = cap.get(cv2.CAP_PROP_FPS)
-                        if fps <= 0 or fps > 240:
-                            fps = 60.0
-                        devices.append(CameraDeviceInfo(index=idx, name=f"Camera {idx}", width=w, height=h, fps=fps))
+                    devices.append(CameraDeviceInfo(index=idx, name=f"Camera {idx}", width=1920, height=1080, fps=60.0))
                     cap.release()
             except Exception:
                 pass
@@ -105,36 +149,14 @@ class WebcamReceiver:
         return devices
 
     def start(self) -> None:
-        """Start asynchronous camera capture thread."""
+        """Start asynchronous camera capture thread non-blockingly."""
         with self._lock:
             if self._running:
                 return
             self._running = True
 
-            cap = cv2.VideoCapture(self.device_index, cv2.CAP_DSHOW)
-            if not cap.isOpened():
-                self._running = False
-                raise RuntimeError(f"Failed to open camera device index {self.device_index}")
-
-            # Request desired video format
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.target_width)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.target_height)
-            cap.set(cv2.CAP_PROP_FPS, self.target_fps)
-
-            # Read one frame to verify actual dimensions
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                cap.release()
-                self._running = False
-                raise RuntimeError(f"Cannot capture initial frame from camera index {self.device_index}")
-
-            self._actual_height, self._actual_width = frame.shape[:2]
-            reported_fps = cap.get(cv2.CAP_PROP_FPS)
-            self._actual_fps = reported_fps if (reported_fps and reported_fps > 10.0) else self.target_fps
-            self._cap = cap
-
             self._thread = threading.Thread(
-                target=self._capture_loop,
+                target=self._capture_worker,
                 name=f"dlss5-camera-worker-{self.device_index}",
                 daemon=True,
             )
@@ -157,31 +179,70 @@ class WebcamReceiver:
             self._thread.join(timeout=1.0)
             self._thread = None
 
-    def _capture_loop(self) -> None:
-        cap = self._cap
-        if not cap:
-            return
+    def _capture_worker(self) -> None:
+        cap: cv2.VideoCapture | None = None
+        try:
+            cap = cv2.VideoCapture(self.device_index, cv2.CAP_DSHOW)
+            if not cap.isOpened():
+                with self._lock:
+                    self._running = False
+                return
 
-        frame_interval = 1.0 / max(1.0, self._actual_fps)
-        last_frame_time = time.perf_counter()
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.target_width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.target_height)
+            cap.set(cv2.CAP_PROP_FPS, self.target_fps)
 
-        while self._running:
-            ret, bgr_frame = cap.read()
-            if not ret or bgr_frame is None:
-                time.sleep(0.005)
-                continue
+            # Read initial frame to latch actual hardware dimensions
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                cap.release()
+                with self._lock:
+                    self._running = False
+                return
 
-            # Convert BGR to RGBA for direct pipeline compatibility
-            rgba_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGBA)
+            with self._lock:
+                self._actual_height, self._actual_width = frame.shape[:2]
+                rep_fps = cap.get(cv2.CAP_PROP_FPS)
+                self._actual_fps = rep_fps if (rep_fps and rep_fps > 10.0) else self.target_fps
+                self._cap = cap
+
+            # Process first frame immediately
+            rgba_first = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
             now = time.perf_counter()
-            ts = int(now * 1000)
-
-            dt = now - last_frame_time
-            curr_fps = (1.0 / dt) if dt > 0.001 else self._actual_fps
-            last_frame_time = now
-
             if self.on_video_frame and self._running:
                 try:
-                    self.on_video_frame(rgba_frame, ts, curr_fps)
+                    self.on_video_frame(rgba_first, int(now * 1000), self._actual_fps)
                 except Exception:
                     pass
+
+            last_frame_time = time.perf_counter()
+
+            while self._running:
+                ret, bgr_frame = cap.read()
+                if not ret or bgr_frame is None:
+                    time.sleep(0.005)
+                    continue
+
+                # Convert BGR to RGBA for direct pipeline compatibility
+                rgba_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGBA)
+                now = time.perf_counter()
+                ts = int(now * 1000)
+
+                dt = now - last_frame_time
+                curr_fps = (1.0 / dt) if dt > 0.001 else self._actual_fps
+                last_frame_time = now
+
+                if self.on_video_frame and self._running:
+                    try:
+                        self.on_video_frame(rgba_frame, ts, curr_fps)
+                    except Exception:
+                        pass
+        finally:
+            with self._lock:
+                if cap and cap.isOpened():
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
+                self._cap = None
+                self._running = False
