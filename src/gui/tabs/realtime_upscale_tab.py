@@ -208,6 +208,7 @@ class RealtimeUpscaleTab(QWidget):
         algo_row.addWidget(algo_lbl)
 
         self.cmb_algo = QComboBox()
+        self.cmb_algo.addItem("NVIDIA DLSS 5 Neural AI (Tensor Cores)", "dlss5_neural")
         self.cmb_algo.addItem("NVIDIA NIS (Directional Edge Scaling)", "nis")
         self.cmb_algo.addItem("FidelityFX CAS Spatial Scaler", "cas")
         self.cmb_algo.addItem("Bicubic Catmull-Rom (Smooth)", "bicubic")
@@ -426,6 +427,10 @@ class RealtimeUpscaleTab(QWidget):
         self.lbl_hud_scale.setStyleSheet("color: #a78bfa; font-weight: 600; font-size: 11px;")
         hud_layout.addWidget(self.lbl_hud_scale)
 
+        self.lbl_hud_algo = QLabel("Engine: NVIDIA DLSS 5 Neural AI")
+        self.lbl_hud_algo.setStyleSheet("color: #9ca0ab; font-size: 11px;")
+        hud_layout.addWidget(self.lbl_hud_algo)
+
         hud_layout.addStretch()
 
         self.lbl_hud_rec = QLabel("REC: OFF")
@@ -566,6 +571,9 @@ class RealtimeUpscaleTab(QWidget):
         cfg = self.upscaler.config
         cfg.enabled = self.chk_upscale_enabled.isChecked()
         cfg.algorithm = self.cmb_algo.currentData() or "nis"
+        algo_name = self.cmb_algo.currentText()
+        if hasattr(self, "lbl_hud_algo"):
+            self.lbl_hud_algo.setText(f"Engine: {algo_name}")
 
         mode_data = self.cmb_target.currentData()
         if mode_data:

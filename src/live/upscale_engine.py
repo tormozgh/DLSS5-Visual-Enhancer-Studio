@@ -270,6 +270,11 @@ class RealtimeUpscalePipeline:
                 except Exception:
                     pass
 
+            try:
+                self.upscaler.close()
+            except Exception:
+                pass
+
     def start_recording(
         self,
         bitrate_mbps: int = 25,
@@ -387,3 +392,7 @@ class RealtimeUpscalePipeline:
         """Cleanly terminate pipeline and background resources."""
         self.stop_pipeline()
         self.finder.stop()
+        try:
+            self.upscaler.close()
+        except Exception:
+            pass

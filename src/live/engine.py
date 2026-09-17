@@ -20,7 +20,7 @@ from typing import Callable
 import numpy as np
 
 from src.core.reshade import ReShadeEngine
-from src.core.streamline import StreamlineHostEngine
+from src.core.streamline import StreamlineHostEngine, StreamlineTelemetry
 from src.live.camera import CameraDeviceInfo, WebcamReceiver
 from src.live.ndi import NdiReceiver, NdiSender, NdiSourceFinder
 from src.live.recorder import LiveRecorder, RecorderTelemetry
@@ -41,6 +41,7 @@ class PipelineTelemetry:
     tally_program: bool = False
     tally_preview: bool = False
     recorder: RecorderTelemetry = field(default_factory=RecorderTelemetry)
+    streamline: StreamlineTelemetry = field(default_factory=StreamlineTelemetry)
 
 
 class RealtimePipeline:
@@ -229,6 +230,11 @@ class RealtimePipeline:
                 except Exception:
                     pass
 
+            try:
+                self.streamline.close()
+            except Exception:
+                pass
+
     def start_recording(
         self,
         bitrate_mbps: int = 25,
@@ -340,6 +346,7 @@ class RealtimePipeline:
                     tally_program=prog,
                     tally_preview=prev,
                     recorder=self.recorder.get_telemetry(),
+                    streamline=self.streamline.get_telemetry(),
                 )
                 try:
                     self.on_telemetry(telem)

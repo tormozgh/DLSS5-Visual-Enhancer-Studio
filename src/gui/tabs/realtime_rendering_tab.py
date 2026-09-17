@@ -177,23 +177,58 @@ class RealtimeRenderingTab(QWidget):
         sl_layout = QVBoxLayout(sl_box)
         sl_layout.setSpacing(8)
 
-        self.chk_sl_enabled = QCheckBox("Enable Streamline Neural Enhancement")
+        self.chk_sl_enabled = QCheckBox("Enable Streamline Enhancement")
         self.chk_sl_enabled.setChecked(True)
         self.chk_sl_enabled.toggled.connect(self._on_sl_config_changed)
         sl_layout.addWidget(self.chk_sl_enabled)
+
+        # Engine Mode Selector (Neural AI vs Fast Spatial)
+        mode_row = QHBoxLayout()
+        mode_label = QLabel("Reconstruction Engine:")
+        mode_label.setStyleSheet("color: #9ca0ab; font-size: 11px;")
+        mode_row.addWidget(mode_label)
+
+        self.cmb_engine_mode = QComboBox()
+        self.cmb_engine_mode.addItem("NVIDIA DLSS 5 Neural AI (Tensor Cores)", "neural")
+        self.cmb_engine_mode.addItem("Ultra-Fast Spatial (NVIDIA NIS 60+ FPS)", "spatial")
+        self.cmb_engine_mode.currentIndexChanged.connect(self._on_sl_config_changed)
+        mode_row.addWidget(self.cmb_engine_mode, 1)
+        sl_layout.addLayout(mode_row)
 
         self.chk_sl_nr = QCheckBox("DLSS-NR Neural Reconstruction")
         self.chk_sl_nr.setChecked(True)
         self.chk_sl_nr.toggled.connect(self._on_sl_config_changed)
         sl_layout.addWidget(self.chk_sl_nr)
 
+        # Reconstruction Style
+        style_row = QHBoxLayout()
+        style_label = QLabel("Reconstruction Style:")
+        style_label.setStyleSheet("color: #9ca0ab; font-size: 11px;")
+        style_row.addWidget(style_label)
+
+        self.cmb_nr_style = QComboBox()
+        self.cmb_nr_style.addItem("Default", "Default")
+        self.cmb_nr_style.addItem("Natural", "Natural")
+        self.cmb_nr_style.addItem("Cinematic", "Cinematic")
+        self.cmb_nr_style.currentIndexChanged.connect(self._on_sl_config_changed)
+        style_row.addWidget(self.cmb_nr_style, 1)
+        sl_layout.addLayout(style_row)
+
         self.slider_nr_intensity = LabeledSlider("NR Denoising Intensity", 0.0, 1.0, 0.85, step=0.05, decimals=2)
         self.slider_nr_intensity.valueChanged.connect(self._on_sl_config_changed)
         sl_layout.addWidget(self.slider_nr_intensity)
 
+        self.slider_nr_tone = LabeledSlider("Local Tone Strength", 0.0, 2.0, 0.50, step=0.05, decimals=2)
+        self.slider_nr_tone.valueChanged.connect(self._on_sl_config_changed)
+        sl_layout.addWidget(self.slider_nr_tone)
+
         self.slider_nr_structure = LabeledSlider("Structural Detail", 0.0, 1.0, 0.65, step=0.05, decimals=2)
         self.slider_nr_structure.valueChanged.connect(self._on_sl_config_changed)
         sl_layout.addWidget(self.slider_nr_structure)
+
+        self.slider_nr_skin = LabeledSlider("Skin / Face Protection", -1.0, 2.0, 0.50, step=0.05, decimals=2)
+        self.slider_nr_skin.valueChanged.connect(self._on_sl_config_changed)
+        sl_layout.addWidget(self.slider_nr_skin)
 
         self.chk_sl_frame_gen = QCheckBox("DLSS-G Multi-Frame Generation (2x FPS: 60 -> 120)")
         self.chk_sl_frame_gen.setChecked(False)
@@ -203,6 +238,11 @@ class RealtimeRenderingTab(QWidget):
         lbl_nvof_tag = QLabel("Motion Vectors: RTX Hardware Optical Flow (NVOF)")
         lbl_nvof_tag.setStyleSheet("color: #7b8190; font-size: 10px;")
         sl_layout.addWidget(lbl_nvof_tag)
+
+        lbl_neural_note = QLabel("Neural mode executes nvngx_dlssnr.dll deep learning models via D3D12/CUDA on RTX Tensor Cores.")
+        lbl_neural_note.setStyleSheet("color: #7b8190; font-size: 10px;")
+        lbl_neural_note.setWordWrap(True)
+        sl_layout.addWidget(lbl_neural_note)
 
         sidebar_layout.addWidget(sl_box)
 
@@ -615,10 +655,14 @@ class RealtimeRenderingTab(QWidget):
     def _on_sl_config_changed(self) -> None:
         cfg = self._pipeline.streamline.config
         cfg.enabled = self.chk_sl_enabled.isChecked()
+        cfg.engine_mode = self.cmb_engine_mode.currentData() or "neural"
         cfg.enable_dlss_nr = self.chk_sl_nr.isChecked()
         cfg.enable_frame_gen = self.chk_sl_frame_gen.isChecked()
+        cfg.nr_style = self.cmb_nr_style.currentText() or "Default"
         cfg.nr_intensity = float(self.slider_nr_intensity.value())
+        cfg.nr_tone = float(self.slider_nr_tone.value())
         cfg.nr_structure = float(self.slider_nr_structure.value())
+        cfg.skin_structure = float(self.slider_nr_skin.value())
         self._pipeline.reprocess_last_frame()
         self._render_viewport_tick()
 
@@ -757,6 +801,11 @@ class RealtimeRenderingTab(QWidget):
         self.lbl_hud_res.setText(f"Resolution: {wi}x{hi}")
         self.lbl_hud_fps.setText(f"In: {telem.input_fps:.1f} FPS | Out: {telem.render_fps:.1f} FPS")
         self.lbl_hud_latency.setText(f"Latency: {telem.latency_ms:.1f} ms")
+
+        if hasattr(telem, "streamline") and telem.streamline.active:
+            self.lbl_hud_pipeline.setText(f"Engine: {telem.streamline.engine_mode} ({telem.streamline.process_time_ms:.1f}ms)")
+        else:
+            self.lbl_hud_pipeline.setText("Engine: Streamline 2.13 + NIS + ReShade FX")
 
         # Tally badges
         if telem.tally_program:
