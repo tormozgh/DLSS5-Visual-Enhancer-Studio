@@ -368,4 +368,29 @@ QToolTip {{
     border-radius: 4px;
     font-size: 12px;
 }}
+
+/* Splitters & Resize Handles */
+QSplitter::handle {{
+    background-color: #22252c;
+}}
+
+QSplitter::handle:horizontal {{
+    width: 6px;
+    margin: 0px 2px;
+    border-radius: 3px;
+}}
+
+QSplitter::handle:horizontal:hover {{
+    background-color: #38bdf8;
+}}
+
+QSplitter::handle:vertical {{
+    height: 6px;
+    margin: 2px 0px;
+    border-radius: 3px;
+}}
+
+QSplitter::handle:vertical:hover {{
+    background-color: #38bdf8;
+}}
 """

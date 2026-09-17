@@ -93,6 +93,7 @@ class StreamlineHostEngine:
         self._gen_frame_count = 0
         self._last_time = time.perf_counter()
         self._last_engine_mode = ""
+        self._engine_lock = threading.Lock()
 
         self._detect_plugins()
         self._init_optical_flow()
@@ -225,32 +226,42 @@ class StreamlineHostEngine:
         enhanced_rgba = None
 
         # 1. Genuine NVIDIA DLSS 5 Neural AI (Tensor Cores / Feature-18)
-        if self.config.engine_mode == "neural" and self.config.enable_dlss_nr:
-            session = self._ensure_neural_session(w, h)
-            if session is not None:
-                try:
-                    # Sync live parameters to native Tensor Core bridge
-                    from src.core.runtime import NR_STYLES
-                    bridge_settings = session._host_bridge_settings
-                    bridge_settings["intensity"] = float(self.config.nr_intensity)
-                    bridge_settings["local_tone"] = float(self.config.nr_tone)
-                    bridge_settings["local_structure"] = float(self.config.nr_structure)
-                    bridge_settings["skin_structure"] = float(self.config.skin_structure)
-                    bridge_settings["color_strength"] = float(self.config.color_strength)
-                    bridge_settings["tone_preservation"] = float(self.config.tone_preservation)
-                    bridge_settings["style"] = NR_STYLES.get(self.config.nr_style, 0)
-                    bridge_settings["nr_passes"] = int(self.config.nr_passes)
+        with self._engine_lock:
+            if self.config.engine_mode == "neural" and self.config.enable_dlss_nr:
+                session = self._ensure_neural_session(w, h)
+                if session is not None:
+                    try:
+                        # Sync live parameters to native Tensor Core bridge
+                        from src.core.runtime import NR_STYLES
+                        bridge_settings = session._host_bridge_settings
+                        bridge_settings["intensity"] = float(self.config.nr_intensity)
+                        bridge_settings["local_tone"] = float(self.config.nr_tone)
+                        bridge_settings["local_structure"] = float(self.config.nr_structure)
+                        bridge_settings["skin_structure"] = float(self.config.skin_structure)
+                        bridge_settings["color_strength"] = float(self.config.color_strength)
+                        bridge_settings["tone_preservation"] = float(self.config.tone_preservation)
+                        bridge_settings["style"] = NR_STYLES.get(self.config.nr_style, 0)
+                        bridge_settings["nr_passes"] = int(self.config.nr_passes)
 
-                    is_reset = (self._frame_count == 0)
-                    out, _ = session.process(
-                        index=self._frame_count,
-                        rgba=rgba_frame,
-                        reset=is_reset,
-                        pts=self._frame_count,
-                    )
-                    enhanced_rgba = out
-                except Exception:
-                    enhanced_rgba = None
+                        session._next_frame_index = int(self._frame_count)
+                        is_reset = (self._frame_count == 0)
+                        out, _ = session.process(
+                            index=self._frame_count,
+                            rgba=rgba_frame,
+                            reset=is_reset,
+                            pts=self._frame_count,
+                        )
+                        enhanced_rgba = out
+                    except Exception:
+                        with self._session_lock:
+                            if self._neural_session is not None:
+                                try:
+                                    self._neural_session.close()
+                                except Exception:
+                                    pass
+                                self._neural_session = None
+                            self._session_dims = (0, 0)
+                        enhanced_rgba = None
 
         # 2. Ultra-Fast NIS Spatial Fallback / Alternative Mode
         if enhanced_rgba is None:

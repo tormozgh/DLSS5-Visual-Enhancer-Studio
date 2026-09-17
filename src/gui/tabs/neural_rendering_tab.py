@@ -142,11 +142,11 @@ class NeuralRenderingTab(QWidget):
         # -------------------------------------------------------------
         # Right Area: Scrollable Parameter & Control Cards
         # -------------------------------------------------------------
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_area.setMinimumWidth(380)
-        scroll_area.setMaximumWidth(440)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setMinimumWidth(320)
+        scroll_area = self.scroll_area
 
         controls_container = QWidget()
         self.controls_layout = QVBoxLayout(controls_container)
@@ -184,6 +184,8 @@ class NeuralRenderingTab(QWidget):
         splitter.addWidget(scroll_area)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
+        splitter.setSizes([850, 420])
+        splitter.setHandleWidth(6)
 
         main_layout.addWidget(splitter)
 
@@ -380,6 +382,8 @@ class NeuralRenderingTab(QWidget):
         codec_layout = QHBoxLayout()
         codec_label = QLabel("Codec:")
         self.combo_codec = QComboBox()
+        self.combo_codec.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.combo_codec.setMinimumContentsLength(8)
         for c in CODEC_CHOICES:
             self.combo_codec.addItem(c)
         self.combo_codec.setCurrentText(self._settings.codec)
@@ -391,6 +395,8 @@ class NeuralRenderingTab(QWidget):
         cont_layout = QHBoxLayout()
         cont_label = QLabel("Container:")
         self.combo_container = QComboBox()
+        self.combo_container.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.combo_container.setMinimumContentsLength(8)
         for c in CONTAINER_CHOICES:
             self.combo_container.addItem(c)
         self.combo_container.setCurrentText(self._settings.container)

@@ -109,16 +109,16 @@ class RealtimeUpscaleTab(QWidget):
         # ----------------------------------------------------------------------
         # RIGHT COLUMN: Controls Sidebar (Scrollable)
         # ----------------------------------------------------------------------
-        sidebar_scroll = QScrollArea()
-        sidebar_scroll.setWidgetResizable(True)
-        sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        sidebar_scroll.setMinimumWidth(360)
-        sidebar_scroll.setMaximumWidth(440)
+        self.sidebar_scroll = QScrollArea()
+        self.sidebar_scroll.setWidgetResizable(True)
+        self.sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.sidebar_scroll.setMinimumWidth(320)
+        sidebar_scroll = self.sidebar_scroll
 
         sidebar = QWidget()
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(10, 10, 10, 10)
-        sidebar_layout.setSpacing(14)
+        sidebar_layout.setContentsMargins(8, 8, 8, 8)
+        sidebar_layout.setSpacing(12)
 
         # 1. Live Input Source Selection
         input_box = QGroupBox("Live Input Source")
@@ -131,6 +131,8 @@ class RealtimeUpscaleTab(QWidget):
         type_row.addWidget(type_lbl)
 
         self.cmb_input_type = QComboBox()
+        self.cmb_input_type.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_input_type.setMinimumContentsLength(8)
         self.cmb_input_type.addItem("Internal: Real-Time Rendering Output", "internal")
         self.cmb_input_type.addItem("NDI Network Stream", "ndi")
         self.cmb_input_type.addItem("Webcam / Capture Card", "webcam")
@@ -154,6 +156,8 @@ class RealtimeUpscaleTab(QWidget):
         ndi_input_layout.setContentsMargins(0, 0, 0, 0)
         ndi_input_layout.setSpacing(6)
         self.cmb_sources = QComboBox()
+        self.cmb_sources.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_sources.setMinimumContentsLength(8)
         self.cmb_sources.addItem("Searching for NDI sources...", None)
         ndi_input_layout.addWidget(self.cmb_sources, 1)
 
@@ -170,6 +174,8 @@ class RealtimeUpscaleTab(QWidget):
         webcam_input_layout.setContentsMargins(0, 0, 0, 0)
         webcam_input_layout.setSpacing(6)
         self.cmb_cameras = QComboBox()
+        self.cmb_cameras.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_cameras.setMinimumContentsLength(8)
         self.cmb_cameras.addItem("Detecting video devices...", None)
         webcam_input_layout.addWidget(self.cmb_cameras, 1)
 
@@ -208,6 +214,8 @@ class RealtimeUpscaleTab(QWidget):
         algo_row.addWidget(algo_lbl)
 
         self.cmb_algo = QComboBox()
+        self.cmb_algo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_algo.setMinimumContentsLength(8)
         self.cmb_algo.addItem("NVIDIA DLSS 5 Neural AI (Tensor Cores)", "dlss5_neural")
         self.cmb_algo.addItem("NVIDIA NIS (Directional Edge Scaling)", "nis")
         self.cmb_algo.addItem("FidelityFX CAS Spatial Scaler", "cas")
@@ -224,6 +232,8 @@ class RealtimeUpscaleTab(QWidget):
         target_row.addWidget(target_lbl)
 
         self.cmb_target = QComboBox()
+        self.cmb_target.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_target.setMinimumContentsLength(8)
         self.cmb_target.addItem("2.00x Ultra Quality (1080p -> 4K UHD)", ("scale", 2.0, (0, 0)))
         self.cmb_target.addItem("1.50x Quality (720p -> 1080p / 1080p -> 1620p)", ("scale", 1.5, (0, 0)))
         self.cmb_target.addItem("1.25x Balanced", ("scale", 1.25, (0, 0)))
@@ -326,6 +336,8 @@ class RealtimeUpscaleTab(QWidget):
         fmt_label.setStyleSheet("color: #9ca0ab; font-size: 11px;")
         fmt_col.addWidget(fmt_label)
         self.cmb_rec_format = QComboBox()
+        self.cmb_rec_format.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_rec_format.setMinimumContentsLength(8)
         self.cmb_rec_format.addItem("MP4 (.mp4)", "mp4")
         self.cmb_rec_format.addItem("MKV (.mkv)", "mkv")
         self.cmb_rec_format.addItem("MOV (.mov)", "mov")
@@ -337,6 +349,8 @@ class RealtimeUpscaleTab(QWidget):
         bitrate_lbl.setStyleSheet("color: #9ca0ab; font-size: 11px;")
         bitrate_col.addWidget(bitrate_lbl)
         self.cmb_rec_bitrate = QComboBox()
+        self.cmb_rec_bitrate.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_rec_bitrate.setMinimumContentsLength(8)
         self.cmb_rec_bitrate.addItem("25 Mbps", 25)
         self.cmb_rec_bitrate.addItem("50 Mbps", 50)
         self.cmb_rec_bitrate.addItem("80 Mbps", 80)
@@ -444,6 +458,8 @@ class RealtimeUpscaleTab(QWidget):
         splitter.addWidget(sidebar_scroll)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
+        splitter.setSizes([850, 420])
+        splitter.setHandleWidth(6)
 
         root_layout.addWidget(splitter)
 
@@ -653,11 +669,11 @@ class RealtimeUpscaleTab(QWidget):
         orig, enh = frames
         ho, wo = orig.shape[:2]
         stride_o = int(orig.strides[0])
-        qimg_before = QImage(orig.data, wo, ho, stride_o, QImage.Format.Format_RGBA8888)
+        qimg_before = QImage(orig.data, wo, ho, stride_o, QImage.Format.Format_RGBA8888).copy()
 
         he, we = enh.shape[:2]
         stride_e = int(enh.strides[0])
-        qimg_after = QImage(enh.data, we, he, stride_e, QImage.Format.Format_RGBA8888)
+        qimg_after = QImage(enh.data, we, he, stride_e, QImage.Format.Format_RGBA8888).copy()
 
         self.canvas.set_images(qimg_before, qimg_after)
 

@@ -73,6 +73,8 @@ class RealtimeUpscalePipeline:
         self._render_fps = 0.0
         self._last_latency = 0.0
         self._total_frames = 0
+        self._process_lock = threading.Lock()
+        self._last_frame_arrival_time = 0.0
 
         # Start NDI discovery in background
         self.finder.start()
@@ -320,73 +322,97 @@ class RealtimeUpscalePipeline:
         fps: float,
     ) -> None:
         """High-performance core upscaling loop."""
-        in_h, in_w = process_rgba.shape[:2]
-        self._last_dimensions = (in_w, in_h)
-
-        with self._lock:
-            self._last_raw_frame = process_rgba
-            self._last_fps = fps
-            self._last_timestamp = timestamp
-
-        t_start = time.perf_counter()
-
-        # Real-Time Spatial Upscale & Directional Sharpening (NIS / CAS / Bicubic)
-        upscaled = self.upscaler.process(process_rgba)
-
-        t_end = time.perf_counter()
-        latency_ms = (t_end - t_start) * 1000.0
-
-        with self._lock:
-            self._last_upscaled_frame = upscaled
-
-        # 1. Output to NDI Broadcast Sender
-        sender = self._sender
-        if sender and sender.is_broadcasting:
-            sender.send_video_frame(upscaled, fps=fps)
-
-        # 2. Output to Hardware NVENC Live Recorder at UPSCALED Resolution
-        if self.recorder.is_recording:
-            self.recorder.write_frame(upscaled)
-
-        # 3. Telemetry Tracking
-        self._fps_frame_count += 1
-        self._total_frames += 1
         now = time.perf_counter()
-        dt = now - self._fps_tracker_time
-        if dt >= 0.5:
-            self._render_fps = self._fps_frame_count / dt
-            self._fps_frame_count = 0
-            self._fps_tracker_time = now
-            self._last_latency = latency_ms
+        self._last_frame_arrival_time = now
 
-            if self.on_telemetry:
-                prog, prev = (sender.get_tally() if sender else (False, False))
-                out_h, out_w = upscaled.shape[:2]
-                telem = PipelineTelemetry(
-                    is_running=True,
-                    source_name=self._current_source_name,
-                    input_resolution=(in_w, in_h),
-                    output_resolution=(out_w, out_h),
-                    input_fps=fps,
-                    render_fps=self._render_fps,
-                    broadcast_fps=fps if sender else 0.0,
-                    latency_ms=self._last_latency,
-                    frame_count=self._total_frames,
-                    tally_program=prog,
-                    tally_preview=prev,
-                    recorder=self.recorder.get_telemetry(),
-                )
-                self.on_telemetry(telem)
+        with self._process_lock:
+            in_h, in_w = process_rgba.shape[:2]
+            self._last_dimensions = (in_w, in_h)
 
-        # 4. Viewport emit for SplitCanvas (original vs upscaled)
-        if self.on_frame_ready:
-            self.on_frame_ready(comparison_original_rgba, upscaled)
+            with self._lock:
+                self._last_raw_frame = process_rgba
+                self._last_fps = fps
+                self._last_timestamp = timestamp
+
+            t_start = time.perf_counter()
+
+            # Real-Time Spatial Upscale & Directional Sharpening (NIS / CAS / Bicubic)
+            upscaled = self.upscaler.process(process_rgba)
+
+            t_end = time.perf_counter()
+            latency_ms = (t_end - t_start) * 1000.0
+
+            with self._lock:
+                self._last_upscaled_frame = upscaled
+
+            # 1. Output to NDI Broadcast Sender
+            sender = self._sender
+            if sender and sender.is_broadcasting:
+                sender.send_video_frame(upscaled, fps=fps)
+
+            # 2. Output to Hardware NVENC Live Recorder at UPSCALED Resolution
+            if self.recorder.is_recording:
+                self.recorder.write_frame(upscaled)
+
+            # 3. Telemetry Tracking
+            self._fps_frame_count += 1
+            self._total_frames += 1
+            dt = now - self._fps_tracker_time
+            if dt >= 0.5:
+                self._render_fps = self._fps_frame_count / dt
+                self._fps_frame_count = 0
+                self._fps_tracker_time = now
+                self._last_latency = latency_ms
+
+                if self.on_telemetry:
+                    prog, prev = (sender.get_tally() if sender else (False, False))
+                    out_h, out_w = upscaled.shape[:2]
+                    telem = PipelineTelemetry(
+                        is_running=True,
+                        source_name=self._current_source_name,
+                        input_resolution=(in_w, in_h),
+                        output_resolution=(out_w, out_h),
+                        input_fps=fps,
+                        render_fps=self._render_fps,
+                        broadcast_fps=fps if sender else 0.0,
+                        latency_ms=self._last_latency,
+                        frame_count=self._total_frames,
+                        tally_program=prog,
+                        tally_preview=prev,
+                        recorder=self.recorder.get_telemetry(),
+                    )
+                    self.on_telemetry(telem)
+
+            # 4. Viewport emit for SplitCanvas (original vs upscaled)
+            if self.on_frame_ready:
+                self.on_frame_ready(comparison_original_rgba, upscaled)
 
     def reprocess_last_frame(self) -> None:
         """Reprocess current frame when paused or changing parameters."""
+        now = time.perf_counter()
+        if (now - self._last_frame_arrival_time) < 0.150:
+            return
+
         raw = self._last_raw_frame
-        if raw is not None:
-            self._process_frame_core(raw, raw, self._last_timestamp, self._last_fps)
+        if raw is None:
+            return
+
+        if not self._process_lock.acquire(blocking=False):
+            return
+
+        try:
+            upscaled = self.upscaler.process(raw)
+            with self._lock:
+                self._last_upscaled_frame = upscaled
+
+            sender = self._sender
+            if sender and sender.is_broadcasting:
+                sender.send_video_frame(upscaled, fps=self._last_fps)
+
+            if self.on_frame_ready:
+                self.on_frame_ready(raw, upscaled)
+        finally:
+            self._process_lock.release()
 
     def close(self) -> None:
         """Cleanly terminate pipeline and background resources."""

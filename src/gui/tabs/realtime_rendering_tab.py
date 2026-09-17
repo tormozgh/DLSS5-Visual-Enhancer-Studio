@@ -102,16 +102,16 @@ class RealtimeRenderingTab(QWidget):
         # ----------------------------------------------------------------------
         # RIGHT COLUMN: Control Sidebar (Scrollable)
         # ----------------------------------------------------------------------
-        sidebar_scroll = QScrollArea()
-        sidebar_scroll.setWidgetResizable(True)
-        sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        sidebar_scroll.setMinimumWidth(360)
-        sidebar_scroll.setMaximumWidth(440)
+        self.sidebar_scroll = QScrollArea()
+        self.sidebar_scroll.setWidgetResizable(True)
+        self.sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.sidebar_scroll.setMinimumWidth(320)
+        sidebar_scroll = self.sidebar_scroll
 
         sidebar = QWidget()
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(10, 10, 10, 10)
-        sidebar_layout.setSpacing(14)
+        sidebar_layout.setContentsMargins(8, 8, 8, 8)
+        sidebar_layout.setSpacing(12)
 
         # 1. Live Input Source Selection (NDI & Webcam)
         ingest_box = QGroupBox("Live Input Source")
@@ -124,6 +124,8 @@ class RealtimeRenderingTab(QWidget):
         mode_row.addWidget(mode_lbl)
 
         self.cmb_input_type = QComboBox()
+        self.cmb_input_type.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_input_type.setMinimumContentsLength(8)
         self.cmb_input_type.addItem("NDI Network Stream", "ndi")
         self.cmb_input_type.addItem("Webcam / Capture Card", "webcam")
         self.cmb_input_type.currentIndexChanged.connect(self._on_input_type_changed)
@@ -136,6 +138,8 @@ class RealtimeRenderingTab(QWidget):
         ndi_input_layout.setContentsMargins(0, 0, 0, 0)
         ndi_input_layout.setSpacing(6)
         self.cmb_sources = QComboBox()
+        self.cmb_sources.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_sources.setMinimumContentsLength(8)
         self.cmb_sources.addItem("Searching for NDI sources...", None)
         ndi_input_layout.addWidget(self.cmb_sources, 1)
 
@@ -151,6 +155,8 @@ class RealtimeRenderingTab(QWidget):
         webcam_input_layout.setContentsMargins(0, 0, 0, 0)
         webcam_input_layout.setSpacing(6)
         self.cmb_cameras = QComboBox()
+        self.cmb_cameras.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_cameras.setMinimumContentsLength(8)
         self.cmb_cameras.addItem("Detecting video devices...", None)
         webcam_input_layout.addWidget(self.cmb_cameras, 1)
 
@@ -189,6 +195,8 @@ class RealtimeRenderingTab(QWidget):
         mode_row.addWidget(mode_label)
 
         self.cmb_engine_mode = QComboBox()
+        self.cmb_engine_mode.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_engine_mode.setMinimumContentsLength(8)
         self.cmb_engine_mode.addItem("NVIDIA DLSS 5 Neural AI (Tensor Cores)", "neural")
         self.cmb_engine_mode.addItem("Ultra-Fast Spatial (NVIDIA NIS 60+ FPS)", "spatial")
         self.cmb_engine_mode.currentIndexChanged.connect(self._on_sl_config_changed)
@@ -207,6 +215,8 @@ class RealtimeRenderingTab(QWidget):
         style_row.addWidget(style_label)
 
         self.cmb_nr_style = QComboBox()
+        self.cmb_nr_style.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_nr_style.setMinimumContentsLength(8)
         self.cmb_nr_style.addItem("Default", "Default")
         self.cmb_nr_style.addItem("Natural", "Natural")
         self.cmb_nr_style.addItem("Cinematic", "Cinematic")
@@ -262,6 +272,8 @@ class RealtimeRenderingTab(QWidget):
         preset_row.addWidget(preset_label)
 
         self.cmb_presets = QComboBox()
+        self.cmb_presets.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_presets.setMinimumContentsLength(8)
         for p in self._preset_manager.get_preset_names():
             self.cmb_presets.addItem(p)
         self.cmb_presets.setCurrentText("Cinematic Teal & Orange")
@@ -276,6 +288,8 @@ class RealtimeRenderingTab(QWidget):
         rs_layout.addWidget(self.chk_lut)
 
         self.cmb_lut_name = QComboBox()
+        self.cmb_lut_name.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_lut_name.setMinimumContentsLength(8)
         for name in self._pipeline.reshade.lut_manager.available_luts:
             self.cmb_lut_name.addItem(name)
         self.cmb_lut_name.setCurrentText("Cinematic Teal & Orange")
@@ -401,6 +415,8 @@ class RealtimeRenderingTab(QWidget):
         fmt_label.setStyleSheet("color: #9ca0ab; font-size: 11px;")
         fmt_col.addWidget(fmt_label)
         self.cmb_rec_format = QComboBox()
+        self.cmb_rec_format.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_rec_format.setMinimumContentsLength(8)
         self.cmb_rec_format.addItem("MP4 (.mp4)", "mp4")
         self.cmb_rec_format.addItem("MKV (.mkv)", "mkv")
         self.cmb_rec_format.addItem("MOV (.mov)", "mov")
@@ -412,6 +428,8 @@ class RealtimeRenderingTab(QWidget):
         res_label.setStyleSheet("color: #9ca0ab; font-size: 11px;")
         res_col.addWidget(res_label)
         self.cmb_rec_res = QComboBox()
+        self.cmb_rec_res.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_rec_res.setMinimumContentsLength(8)
         self.cmb_rec_res.addItem("Match Stream (Auto)", (0, 0))
         self.cmb_rec_res.addItem("1080p FHD (1920x1080)", (1920, 1080))
         self.cmb_rec_res.addItem("1440p 2K (2560x1440)", (2560, 1440))
@@ -428,6 +446,8 @@ class RealtimeRenderingTab(QWidget):
         rec_layout.addWidget(bitrate_label)
 
         self.cmb_rec_bitrate = QComboBox()
+        self.cmb_rec_bitrate.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_rec_bitrate.setMinimumContentsLength(8)
         self.cmb_rec_bitrate.addItem("15 Mbps (Standard Quality)", 15)
         self.cmb_rec_bitrate.addItem("25 Mbps (Broadcast Standard)", 25)
         self.cmb_rec_bitrate.addItem("50 Mbps (High Bitrate Studio)", 50)
@@ -535,7 +555,9 @@ class RealtimeRenderingTab(QWidget):
         splitter.addWidget(viewport_container)
         splitter.addWidget(sidebar_scroll)
         splitter.setStretchFactor(0, 1)  # Left (Canvas) expands
-        splitter.setStretchFactor(1, 0)  # Right (Sidebar) fixed width
+        splitter.setStretchFactor(1, 0)  # Right (Sidebar)
+        splitter.setSizes([850, 420])
+        splitter.setHandleWidth(6)
 
         root_layout.addWidget(splitter)
 
@@ -788,11 +810,11 @@ class RealtimeRenderingTab(QWidget):
         orig, enh = frames
         ho, wo = orig.shape[:2]
         stride_o = int(orig.strides[0])
-        qimg_before = QImage(orig.data, wo, ho, stride_o, QImage.Format.Format_RGBA8888)
+        qimg_before = QImage(orig.data, wo, ho, stride_o, QImage.Format.Format_RGBA8888).copy()
 
         he, we = enh.shape[:2]
         stride_e = int(enh.strides[0])
-        qimg_after = QImage(enh.data, we, he, stride_e, QImage.Format.Format_RGBA8888)
+        qimg_after = QImage(enh.data, we, he, stride_e, QImage.Format.Format_RGBA8888).copy()
 
         self.canvas.set_images(qimg_before, qimg_after)
 

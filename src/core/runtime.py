@@ -646,10 +646,10 @@ class DLSSFrameSession:
             raise Cancelled("Render stopped by user.")
         if self.closed:
             raise RuntimeError("The Neural Rendering bridge session is closed.")
-        if self._next_frame_index is None:
+        if self._streaming or self._next_frame_index is None:
             self._next_frame_index = int(index)
-        if index != self._next_frame_index:
-            raise ValueError("Neural Rendering frames must have consecutive uint32 indices.")
+        elif index != self._next_frame_index:
+            self._next_frame_index = int(index)
         if rgba.dtype != np.uint8 or rgba.shape != (
             self.output_height,
             self.output_width,
