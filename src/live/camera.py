@@ -314,40 +314,106 @@ class WebcamReceiver:
                     self._running = False
                 return
 
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.target_width)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.target_height)
-            cap.set(cv2.CAP_PROP_FPS, self.target_fps)
+            # Format negotiation for DirectShow:
+            # If target resolution is > 640x480 (e.g. 720p or 1080p), MJPG is required
+            # on USB 2.0 webcams (such as Logitech C310) to avoid USB bandwidth limits.
+            # CRITICAL: Do NOT call cap.set(cv2.CAP_PROP_FPS, ...) because OpenCV's
+            # DShow implementation resets FourCC back to uncompressed YUY2 when setting FPS!
+            if self.target_width > 640 or self.target_height > 480:
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.target_width)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.target_height)
+            else:
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.target_width)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.target_height)
 
-            # Read initial frame to latch actual hardware dimensions
-            ret, frame = cap.read()
-            if not ret or frame is None:
+            try:
+                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+            except Exception:
+                pass
+
+            # Validate initial frame reception via grab/retrieve
+            initial_frame: np.ndarray | None = None
+            for _ in range(3):
+                if not self._running:
+                    break
+                t_init = time.perf_counter()
+                grabbed = cap.grab()
+                if not grabbed:
+                    time.sleep(0.01)
+                    continue
+                ret, frame = cap.retrieve()
+                dt_init = time.perf_counter() - t_init
+                if ret and frame is not None and frame.size > 0 and dt_init < 0.85:
+                    initial_frame = frame
+                    break
+                time.sleep(0.01)
+
+            # If high-res or MJPG failed or timed out, fallback to native default resolution (640x480)
+            if initial_frame is None and self._running:
                 cap.release()
+                cap = cv2.VideoCapture(self.device_index, cv2.CAP_DSHOW)
+                if not cap.isOpened():
+                    with self._lock:
+                        self._running = False
+                    return
+                for _ in range(3):
+                    if not self._running:
+                        break
+                    t_init = time.perf_counter()
+                    grabbed = cap.grab()
+                    if not grabbed:
+                        time.sleep(0.01)
+                        continue
+                    ret, frame = cap.retrieve()
+                    dt_init = time.perf_counter() - t_init
+                    if ret and frame is not None and frame.size > 0 and dt_init < 0.85:
+                        initial_frame = frame
+                        break
+                    time.sleep(0.01)
+
+            if initial_frame is not None:
                 with self._lock:
-                    self._running = False
-                return
+                    self._actual_height, self._actual_width = initial_frame.shape[:2]
+                    rep_fps = cap.get(cv2.CAP_PROP_FPS)
+                    self._actual_fps = rep_fps if (rep_fps and rep_fps > 10.0) else self.target_fps
+                    self._cap = cap
 
-            with self._lock:
-                self._actual_height, self._actual_width = frame.shape[:2]
-                rep_fps = cap.get(cv2.CAP_PROP_FPS)
-                self._actual_fps = rep_fps if (rep_fps and rep_fps > 10.0) else self.target_fps
-                self._cap = cap
-
-            # Process first frame immediately
-            rgba_first = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
-            now = time.perf_counter()
-            if self.on_video_frame and self._running:
-                try:
-                    self.on_video_frame(rgba_first, int(now * 1000), self._actual_fps)
-                except Exception:
-                    pass
+                rgba_first = cv2.cvtColor(initial_frame, cv2.COLOR_BGR2RGBA)
+                now = time.perf_counter()
+                if self.on_video_frame and self._running:
+                    try:
+                        self.on_video_frame(rgba_first, int(now * 1000), self._actual_fps)
+                    except Exception:
+                        pass
+            else:
+                with self._lock:
+                    self._cap = cap
 
             last_frame_time = time.perf_counter()
 
             while self._running:
-                ret, bgr_frame = cap.read()
-                if not ret or bgr_frame is None:
+                t_grab_start = time.perf_counter()
+                grabbed = cap.grab()
+                if not grabbed:
                     time.sleep(0.005)
                     continue
+
+                ret, bgr_frame = cap.retrieve()
+                grab_dt = time.perf_counter() - t_grab_start
+
+                # Strict frame validation:
+                # If retrieve returned False or took >= 0.85s (indicating DirectShow driver timeout),
+                # drop this frame to prevent injecting 1 FPS black screens into the pipeline
+                if not ret or bgr_frame is None or bgr_frame.size == 0 or grab_dt >= 0.85:
+                    time.sleep(0.005)
+                    continue
+
+                h, w = bgr_frame.shape[:2]
+                if w != self._actual_width or h != self._actual_height:
+                    with self._lock:
+                        self._actual_width = w
+                        self._actual_height = h
 
                 # Convert BGR to RGBA for direct pipeline compatibility
                 rgba_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGBA)

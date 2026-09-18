@@ -643,9 +643,9 @@ class RealtimeRenderingTab(QWidget):
 
                 cams = self._pipeline.get_cameras()
                 cam_info = next((c for c in cams if c.index == dev_idx), None)
-                w = cam_info.width if cam_info else 1920
-                h = cam_info.height if cam_info else 1080
-                fps = cam_info.fps if cam_info else 60.0
+                w = cam_info.width if cam_info else 1280
+                h = cam_info.height if cam_info else 720
+                fps = cam_info.fps if cam_info else 30.0
                 cam_name = cam_info.name if cam_info else self.cmb_cameras.currentText()
 
                 try:
