@@ -22,12 +22,14 @@ class CameraDeviceInfo:
     width: int = 1920
     height: int = 1080
     fps: float = 60.0
+    is_hardware: bool = True
 
     @property
     def display_name(self) -> str:
+        tag = "" if self.is_hardware else " [Virtual]"
         if self.name and self.name != f"Camera {self.index}":
-            return f"[{self.index}] {self.name}"
-        return f"Camera {self.index} ({self.width}x{self.height})"
+            return f"{self.name} ({self.width}x{self.height}){tag}"
+        return f"Camera {self.index} ({self.width}x{self.height}){tag}"
 
 
 class WebcamReceiver:
@@ -35,6 +37,8 @@ class WebcamReceiver:
 
     _cached_devices: list[CameraDeviceInfo] | None = None
     _cache_time: float = 0.0
+    _scan_lock: threading.Lock = threading.Lock()
+    _is_scanning: bool = False
 
     def __init__(
         self,
@@ -75,78 +79,226 @@ class WebcamReceiver:
             return self._actual_fps
 
     @classmethod
-    def list_cameras(cls, max_probe: int = 8, force_refresh: bool = False) -> list[CameraDeviceInfo]:
-        """Enumerate available video capture hardware devices via DirectShow Registry instantaneously."""
+    def _enum_dshow_monikers_ctypes(cls) -> list[tuple[str, str]]:
+        """Fallback DirectShow device enumeration using pure Windows COM ctypes."""
+        import ctypes
+        from ctypes import wintypes, POINTER, byref, c_void_p, Structure, cast
+
+        ole32 = ctypes.windll.ole32
+        ole32.CoInitialize(None)
+
+        class GUID(Structure):
+            _fields_ = [
+                ("Data1", wintypes.DWORD),
+                ("Data2", wintypes.WORD),
+                ("Data3", wintypes.WORD),
+                ("Data4", wintypes.BYTE * 8),
+            ]
+
+            def __init__(self, s):
+                super().__init__()
+                ole32.CLSIDFromString(ctypes.c_wchar_p(s), byref(self))
+
+        CLSID_SystemDeviceEnum = GUID("{62BE5D10-60EB-11D0-BD3B-00A0C911CE86}")
+        CLSID_VideoInputDeviceCategory = GUID("{860BB310-5D01-11D0-BD3B-00A0C911CE86}")
+        IID_ICreateDevEnum = GUID("{29840822-5B84-11D0-BD3B-00A0C911CE86}")
+        IID_IPropertyBag = GUID("{55272A00-42CB-11CE-8135-00AA004BB851}")
+
+        pDevEnum = c_void_p()
+        hr = ole32.CoCreateInstance(
+            byref(CLSID_SystemDeviceEnum), None, 1, byref(IID_ICreateDevEnum), byref(pDevEnum)
+        )
+        if hr != 0 or not pDevEnum.value:
+            return []
+
+        vtable = cast(pDevEnum, POINTER(POINTER(c_void_p))).contents
+        CreateClassEnumerator = ctypes.WINFUNCTYPE(
+            ctypes.c_long, c_void_p, POINTER(GUID), POINTER(c_void_p), wintypes.DWORD
+        )(vtable[3])
+
+        pEnum = c_void_p()
+        hr_enum = CreateClassEnumerator(pDevEnum, byref(CLSID_VideoInputDeviceCategory), byref(pEnum), 0)
+        if hr_enum != 0 or not pEnum.value:
+            return []
+
+        enum_vtable = cast(pEnum, POINTER(POINTER(c_void_p))).contents
+        Next_func = ctypes.WINFUNCTYPE(
+            ctypes.c_long, c_void_p, wintypes.ULONG, POINTER(c_void_p), POINTER(wintypes.ULONG)
+        )(enum_vtable[3])
+
+        class VARIANT(Structure):
+            _fields_ = [
+                ("vt", wintypes.WORD),
+                ("wReserved1", wintypes.WORD),
+                ("wReserved2", wintypes.WORD),
+                ("wReserved3", wintypes.WORD),
+                ("bstrVal", c_void_p),
+                ("dummy", wintypes.BYTE * 8),
+            ]
+
+        results = []
+        idx = 0
+        while True:
+            pMoniker = c_void_p()
+            fetched = wintypes.ULONG(0)
+            if Next_func(pEnum, 1, byref(pMoniker), byref(fetched)) != 0 or fetched.value == 0:
+                break
+
+            mon_vtable = cast(pMoniker, POINTER(POINTER(c_void_p))).contents
+            BindToStorage_func = ctypes.WINFUNCTYPE(
+                ctypes.c_long, c_void_p, c_void_p, c_void_p, POINTER(GUID), POINTER(c_void_p)
+            )(mon_vtable[9])
+
+            pPropBag = c_void_p()
+            name = f"Camera {idx}"
+            path = ""
+            if BindToStorage_func(pMoniker, None, None, byref(IID_IPropertyBag), byref(pPropBag)) == 0 and pPropBag.value:
+                prop_vtable = cast(pPropBag, POINTER(POINTER(c_void_p))).contents
+                Read_func = ctypes.WINFUNCTYPE(
+                    ctypes.c_long, c_void_p, ctypes.c_wchar_p, POINTER(VARIANT), c_void_p
+                )(prop_vtable[3])
+
+                var = VARIANT()
+                if Read_func(pPropBag, "FriendlyName", byref(var), None) == 0:
+                    if var.vt == 8:
+                        name = ctypes.wstring_at(var.bstrVal)
+
+                var2 = VARIANT()
+                if Read_func(pPropBag, "DevicePath", byref(var2), None) == 0:
+                    if var2.vt == 8:
+                        path = ctypes.wstring_at(var2.bstrVal)
+
+                ctypes.WINFUNCTYPE(wintypes.ULONG, c_void_p)(prop_vtable[2])(pPropBag)
+
+            results.append((name, path))
+            ctypes.WINFUNCTYPE(wintypes.ULONG, c_void_p)(mon_vtable[2])(pMoniker)
+            idx += 1
+
+        ctypes.WINFUNCTYPE(wintypes.ULONG, c_void_p)(enum_vtable[2])(pEnum)
+        ctypes.WINFUNCTYPE(wintypes.ULONG, c_void_p)(vtable[2])(pDevEnum)
+        return results
+
+    @classmethod
+    def _perform_active_scan(cls, max_probe: int = 10) -> list[CameraDeviceInfo]:
+        """Perform comprehensive parallel scan for active webcams and capture cards."""
         now = time.time()
-        if not force_refresh and cls._cached_devices is not None and (now - cls._cache_time < 2.0):
-            return cls._cached_devices
 
-        devices: list[CameraDeviceInfo] = []
-
-        # DirectShow Video Input Device Category CLSID
-        # Fast query via Windows Registry without hardware initialization stalls (< 1ms)
+        # 1. Enumerate Windows registered video devices with paths
+        raw_devices: list[tuple[str, str]] = []
         try:
-            import winreg
-
-            seen_names: set[str] = set()
-            idx = 0
-            for root_key in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
-                reg_paths = [
-                    r"SOFTWARE\Classes\CLSID\{860BB310-5D01-11d0-BD3B-00A0C911CE86}\Instance",
-                    r"SOFTWARE\WOW6432Node\Classes\CLSID\{860BB310-5D01-11d0-BD3B-00A0C911CE86}\Instance",
-                ]
-                for path in reg_paths:
-                    try:
-                        key = winreg.OpenKey(root_key, path)
-                    except OSError:
-                        continue
-
-                    sub_idx = 0
-                    while True:
-                        try:
-                            subkey_name = winreg.EnumKey(key, sub_idx)
-                            subkey = winreg.OpenKey(key, subkey_name)
-                            try:
-                                friendly_name, _ = winreg.QueryValueEx(subkey, "FriendlyName")
-                            except FileNotFoundError:
-                                friendly_name = f"Capture Device {idx}"
-
-                            if friendly_name and friendly_name not in seen_names:
-                                seen_names.add(friendly_name)
-                                devices.append(
-                                    CameraDeviceInfo(
-                                        index=idx,
-                                        name=str(friendly_name),
-                                        width=1920,
-                                        height=1080,
-                                        fps=60.0,
-                                    )
-                                )
-                                idx += 1
-                            sub_idx += 1
-                        except OSError:
-                            break
-
-            if devices:
-                cls._cached_devices = devices
-                cls._cache_time = now
-                return devices
+            from cv2_enumerate_cameras._windows_backend import DSHOW_enumerate_cameras
+            raw_devices = DSHOW_enumerate_cameras()
         except Exception:
-            pass
+            try:
+                raw_devices = cls._enum_dshow_monikers_ctypes()
+            except Exception:
+                raw_devices = []
 
-        # Fallback if registry query unsupported (e.g. non-Windows)
-        for idx in range(min(max_probe, 2)):
+        hw_names = [name for name, path in raw_devices if path and ("usb" in path.lower() or "pci" in path.lower())]
+        ndi_names = [name for name, path in raw_devices if path and "root#media" in path.lower()]
+
+        # 2. Probe active indices in parallel for maximum responsiveness
+        probe_limit = max(len(raw_devices), 8)
+        probe_limit = min(probe_limit, max_probe)
+
+        def probe_index(idx: int):
             try:
                 cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-                if cap.isOpened():
-                    devices.append(CameraDeviceInfo(index=idx, name=f"Camera {idx}", width=1920, height=1080, fps=60.0))
+                if not cap.isOpened():
+                    return None
+                ret, frame = cap.read()
+                if not ret or frame is None:
                     cap.release()
+                    return None
+                h, w = frame.shape[:2]
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                if not fps or fps <= 5 or fps > 240:
+                    fps = 30.0
+                mean_val = float(frame.mean())
+                cap.release()
+                return (idx, w, h, fps, mean_val)
             except Exception:
-                pass
+                return None
 
-        cls._cached_devices = devices
+        probe_results = [None] * probe_limit
+        threads = []
+        for i in range(probe_limit):
+            t = threading.Thread(
+                target=lambda idx=i: probe_results.__setitem__(idx, probe_index(idx)),
+                daemon=True,
+            )
+            threads.append(t)
+            t.start()
+
+        deadline = time.time() + 1.8
+        for t in threads:
+            rem = max(0.001, deadline - time.time())
+            t.join(timeout=rem)
+
+        active = [r for r in probe_results if r is not None]
+
+        # 3. Associate device names
+        devices: list[CameraDeviceInfo] = []
+        hw_idx = 0
+
+        # Put live feeds first
+        active.sort(key=lambda x: (x[4] < 0.5, x[0]))
+
+        for idx, w, h, fps, mean_val in active:
+            is_live = (mean_val >= 0.5)
+            if is_live and hw_idx < len(hw_names):
+                name = hw_names[hw_idx]
+                hw_idx += 1
+                # Upgrade standard HD webcam resolution if detected as 640x480 default
+                if w < 1280 and any(k in name.lower() for k in ["hd", "1080", "720", "c310", "c920", "c922", "brio", "cam link", "capture"]):
+                    w, h = 1280, 720
+                devices.append(CameraDeviceInfo(index=idx, name=name, width=w, height=h, fps=fps, is_hardware=True))
+            elif is_live and not hw_names:
+                name = f"Camera {idx}"
+                devices.append(CameraDeviceInfo(index=idx, name=name, width=w, height=h, fps=fps, is_hardware=True))
+            elif ndi_names and idx in [1, 2, 3, 4] and idx <= len(ndi_names):
+                name = ndi_names[idx - 1]
+                devices.append(CameraDeviceInfo(index=idx, name=name, width=w, height=h, fps=fps, is_hardware=False))
+            else:
+                name = f"Camera {idx}"
+                devices.append(CameraDeviceInfo(index=idx, name=name, width=w, height=h, fps=fps, is_hardware=False))
+
+        # Prioritize and filter: Keep active hardware webcams and capture cards
+        hardware_devices = [d for d in devices if d.is_hardware]
+        final_devices = hardware_devices if hardware_devices else devices
+
+        cls._cached_devices = final_devices
         cls._cache_time = now
-        return devices
+        return final_devices
+
+    @classmethod
+    def list_cameras(cls, max_probe: int = 10, force_refresh: bool = False) -> list[CameraDeviceInfo]:
+        """Enumerate active hardware webcams and video capture devices."""
+        now = time.time()
+        if not force_refresh and cls._cached_devices is not None and (now - cls._cache_time < 5.0):
+            return cls._cached_devices
+
+        # If cache exists and not forcing refresh, trigger background scan so caller doesn't wait
+        if cls._cached_devices is not None and not force_refresh:
+            if not cls._is_scanning:
+                def bg_scan():
+                    with cls._scan_lock:
+                        cls._is_scanning = True
+                        try:
+                            cls._perform_active_scan(max_probe)
+                        finally:
+                            cls._is_scanning = False
+                threading.Thread(target=bg_scan, daemon=True).start()
+            return cls._cached_devices
+
+        with cls._scan_lock:
+            if not force_refresh and cls._cached_devices is not None and (time.time() - cls._cache_time < 3.0):
+                return cls._cached_devices
+            cls._is_scanning = True
+            try:
+                return cls._perform_active_scan(max_probe)
+            finally:
+                cls._is_scanning = False
 
     def start(self) -> None:
         """Start asynchronous camera capture thread non-blockingly."""
@@ -246,3 +398,4 @@ class WebcamReceiver:
                         pass
                 self._cap = None
                 self._running = False
+

@@ -638,18 +638,27 @@ class RealtimeRenderingTab(QWidget):
                 if dev_idx is None:
                     QMessageBox.warning(self, "No Camera Selected", "Please select an active video capture device.")
                     return
+
+                cams = self._pipeline.get_cameras()
+                cam_info = next((c for c in cams if c.index == dev_idx), None)
+                w = cam_info.width if cam_info else 1920
+                h = cam_info.height if cam_info else 1080
+                fps = cam_info.fps if cam_info else 60.0
+                cam_name = cam_info.name if cam_info else self.cmb_cameras.currentText()
+
                 try:
                     self._pipeline.start_webcam_pipeline(
                         device_index=dev_idx,
-                        width=1920,
-                        height=1080,
-                        fps=60.0,
+                        width=w,
+                        height=h,
+                        fps=fps,
                         enable_ndi_out=enable_out,
+                        source_name=cam_name,
                     )
                     self.btn_toggle_stream.setText("Stop Live Stream")
                     self.btn_toggle_stream.setStyleSheet("background-color: #991b1b; color: white;")
-                    self.lbl_stream_status.setText(f"Status: Streaming from Camera {dev_idx}")
-                    self.statusMessage.emit(f"Connected to camera index {dev_idx}", False)
+                    self.lbl_stream_status.setText(f"Status: Streaming from {cam_name}")
+                    self.statusMessage.emit(f"Connected to camera: {cam_name}", False)
                 except Exception as exc:
                     QMessageBox.critical(self, "Camera Error", f"Failed to start camera capture: {exc}")
             else:

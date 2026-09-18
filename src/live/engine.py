@@ -141,13 +141,21 @@ class RealtimePipeline:
         height: int = 1080,
         fps: float = 60.0,
         enable_ndi_out: bool = True,
+        source_name: str | None = None,
     ) -> None:
         """Start capturing from DirectShow webcam or capture card."""
         with self._lock:
             if self._is_running:
                 self.stop_pipeline()
 
-            self._current_source_name = f"Camera {device_index}"
+            if not source_name:
+                cams = WebcamReceiver.list_cameras()
+                for c in cams:
+                    if c.index == device_index:
+                        source_name = c.name
+                        break
+
+            self._current_source_name = source_name or f"Camera {device_index}"
             self._source_type = "webcam"
             self._is_running = True
             self._fps_tracker_time = time.perf_counter()
