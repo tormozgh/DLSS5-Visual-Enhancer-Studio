@@ -179,126 +179,100 @@ class WebcamReceiver:
         return results
 
     @classmethod
-    def _perform_active_scan(cls, max_probe: int = 10) -> list[CameraDeviceInfo]:
-        """Perform comprehensive parallel scan for active webcams and capture cards."""
-        now = time.time()
-
-        # 1. Enumerate Windows registered video devices with paths
-        raw_devices: list[tuple[str, str]] = []
-        try:
-            from cv2_enumerate_cameras._windows_backend import DSHOW_enumerate_cameras
-            raw_devices = DSHOW_enumerate_cameras()
-        except Exception:
-            try:
-                raw_devices = cls._enum_dshow_monikers_ctypes()
-            except Exception:
-                raw_devices = []
-
-        hw_names = [name for name, path in raw_devices if path and ("usb" in path.lower() or "pci" in path.lower())]
-        ndi_names = [name for name, path in raw_devices if path and "root#media" in path.lower()]
-
-        # 2. Probe active indices in parallel for maximum responsiveness
-        probe_limit = max(len(raw_devices), 8)
-        probe_limit = min(probe_limit, max_probe)
-
-        def probe_index(idx: int):
-            try:
-                cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-                if not cap.isOpened():
-                    return None
-                ret, frame = cap.read()
-                if not ret or frame is None:
-                    cap.release()
-                    return None
-                h, w = frame.shape[:2]
-                fps = cap.get(cv2.CAP_PROP_FPS)
-                if not fps or fps <= 5 or fps > 240:
-                    fps = 30.0
-                mean_val = float(frame.mean())
-                cap.release()
-                return (idx, w, h, fps, mean_val)
-            except Exception:
-                return None
-
-        probe_results = [None] * probe_limit
-        threads = []
-        for i in range(probe_limit):
-            t = threading.Thread(
-                target=lambda idx=i: probe_results.__setitem__(idx, probe_index(idx)),
-                daemon=True,
-            )
-            threads.append(t)
-            t.start()
-
-        deadline = time.time() + 1.8
-        for t in threads:
-            rem = max(0.001, deadline - time.time())
-            t.join(timeout=rem)
-
-        active = [r for r in probe_results if r is not None]
-
-        # 3. Associate device names
-        devices: list[CameraDeviceInfo] = []
-        hw_idx = 0
-
-        # Put live feeds first
-        active.sort(key=lambda x: (x[4] < 0.5, x[0]))
-
-        for idx, w, h, fps, mean_val in active:
-            is_live = (mean_val >= 0.5)
-            if is_live and hw_idx < len(hw_names):
-                name = hw_names[hw_idx]
-                hw_idx += 1
-                # Upgrade standard HD webcam resolution if detected as 640x480 default
-                if w < 1280 and any(k in name.lower() for k in ["hd", "1080", "720", "c310", "c920", "c922", "brio", "cam link", "capture"]):
-                    w, h = 1280, 720
-                devices.append(CameraDeviceInfo(index=idx, name=name, width=w, height=h, fps=fps, is_hardware=True))
-            elif is_live and not hw_names:
-                name = f"Camera {idx}"
-                devices.append(CameraDeviceInfo(index=idx, name=name, width=w, height=h, fps=fps, is_hardware=True))
-            elif ndi_names and idx in [1, 2, 3, 4] and idx <= len(ndi_names):
-                name = ndi_names[idx - 1]
-                devices.append(CameraDeviceInfo(index=idx, name=name, width=w, height=h, fps=fps, is_hardware=False))
-            else:
-                name = f"Camera {idx}"
-                devices.append(CameraDeviceInfo(index=idx, name=name, width=w, height=h, fps=fps, is_hardware=False))
-
-        # Prioritize and filter: Keep active hardware webcams and capture cards
-        hardware_devices = [d for d in devices if d.is_hardware]
-        final_devices = hardware_devices if hardware_devices else devices
-
-        cls._cached_devices = final_devices
-        cls._cache_time = now
-        return final_devices
-
-    @classmethod
     def list_cameras(cls, max_probe: int = 10, force_refresh: bool = False) -> list[CameraDeviceInfo]:
-        """Enumerate active hardware webcams and video capture devices."""
-        now = time.time()
-        if not force_refresh and cls._cached_devices is not None and (now - cls._cache_time < 5.0):
-            return cls._cached_devices
+        """Enumerate video capture devices dynamically on the host system via DirectShow.
 
-        # If cache exists and not forcing refresh, trigger background scan so caller doesn't wait
-        if cls._cached_devices is not None and not force_refresh:
-            if not cls._is_scanning:
-                def bg_scan():
-                    with cls._scan_lock:
-                        cls._is_scanning = True
-                        try:
-                            cls._perform_active_scan(max_probe)
-                        finally:
-                            cls._is_scanning = False
-                threading.Thread(target=bg_scan, daemon=True).start()
+        Directly maps Windows DirectShow device monikers to their exact OpenCV capture index (0..N).
+        Filters and prioritizes physical hardware webcams and HDMI capture cards over virtual devices.
+        """
+        now = time.time()
+        if not force_refresh and cls._cached_devices is not None and (now - cls._cache_time < 3.0):
             return cls._cached_devices
 
         with cls._scan_lock:
             if not force_refresh and cls._cached_devices is not None and (time.time() - cls._cache_time < 3.0):
                 return cls._cached_devices
-            cls._is_scanning = True
+
+            raw_devices: list[tuple[str, str]] = []
             try:
-                return cls._perform_active_scan(max_probe)
-            finally:
-                cls._is_scanning = False
+                from cv2_enumerate_cameras._windows_backend import DSHOW_enumerate_cameras
+                raw_devices = DSHOW_enumerate_cameras()
+            except Exception:
+                pass
+
+            if not raw_devices:
+                try:
+                    raw_devices = cls._enum_dshow_monikers_ctypes()
+                except Exception:
+                    raw_devices = []
+
+            all_devices: list[CameraDeviceInfo] = []
+            for idx, (name, path) in enumerate(raw_devices):
+                name_l = name.lower()
+                path_l = path.lower() if path else ""
+
+                # Identify virtual camera filters (OBS Virtual Camera, NDI, Spout, Broadcast, etc.)
+                is_virtual = (
+                    any(k in name_l for k in [
+                        "obs virtual", "virtual camera", "virtualcam",
+                        "broadcast", "nvidia broadcast", "ndi webcam",
+                        "spoutcam", "manycam", "xsplit", "vmix",
+                        "epoccam", "droidcam", "snap camera", "screen capture"
+                    ])
+                    or "root#media" in path_l
+                    or not path_l
+                )
+                is_hardware = not is_virtual and any(
+                    bus in path_l for bus in ["usb", "pci", "acpi", "uvc", "pnp"]
+                )
+
+                # Sensible resolution heuristics based on device capabilities
+                w, h, fps = 1920, 1080, 60.0
+                if any(k in name_l for k in ["c310", "c270", "720"]):
+                    w, h, fps = 1280, 720, 30.0
+                elif any(k in name_l for k in ["4k", "brio", "4k60", "pro capture"]):
+                    w, h, fps = 3840, 2160, 60.0
+                elif not is_hardware:
+                    fps = 30.0
+
+                all_devices.append(
+                    CameraDeviceInfo(
+                        index=idx,
+                        name=name,
+                        width=w,
+                        height=h,
+                        fps=fps,
+                        is_hardware=is_hardware,
+                    )
+                )
+
+            # Fallback if no DirectShow monikers were found (e.g. non-Windows or broken COM)
+            if not all_devices:
+                for idx in range(min(max_probe, 4)):
+                    try:
+                        cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+                        if cap.isOpened():
+                            all_devices.append(
+                                CameraDeviceInfo(
+                                    index=idx,
+                                    name=f"Camera {idx}",
+                                    width=1920,
+                                    height=1080,
+                                    fps=30.0,
+                                    is_hardware=True,
+                                )
+                            )
+                            cap.release()
+                    except Exception:
+                        pass
+
+            # Prioritize real physical webcams and capture cards
+            hardware_devices = [d for d in all_devices if d.is_hardware]
+            final_devices = hardware_devices if hardware_devices else all_devices
+
+            cls._cached_devices = final_devices
+            cls._cache_time = now
+            return final_devices
 
     def start(self) -> None:
         """Start asynchronous camera capture thread non-blockingly."""

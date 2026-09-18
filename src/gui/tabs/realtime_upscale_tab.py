@@ -514,6 +514,8 @@ class RealtimeUpscaleTab(QWidget):
 
     def _auto_refresh_cameras(self) -> None:
         """Periodic background refresh to detect newly plugged webcams instantly."""
+        if self._pipeline.is_running:
+            return
         if self.cmb_input_type.currentData() != "webcam":
             return
         cameras = self._pipeline.get_cameras()
