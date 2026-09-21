@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QPoint, QRect, QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen, QPolygonF
+from PyQt6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen, QPolygon
 from PyQt6.QtWidgets import QWidget
 
 
@@ -140,7 +140,7 @@ class TimeRulerWidget(QWidget):
         px = self.frame_to_x(self.current_frame)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor("#ef4444"))  # Vivid red playhead needle
-        poly = QPolygonF([
+        poly = QPolygon([
             QPoint(int(px - 7), 0),
             QPoint(int(px + 7), 0),
             QPoint(int(px + 7), height - 8),
