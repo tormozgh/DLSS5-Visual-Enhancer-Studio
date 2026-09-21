@@ -330,4 +330,5 @@ ReShadeLutManager = FastUnifiedColorLUT
 FastTonemapLUT = FastUnifiedColorLUT
 ReShadeFilmGrain = PrecachedFilmGrain
 ReShadeCAS = FastReShadeCAS
+ReShadePostProcessor = ReShadeEngine
 

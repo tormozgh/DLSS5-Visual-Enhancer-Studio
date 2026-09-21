@@ -23,6 +23,7 @@ from .tabs.neural_rendering_tab import NeuralRenderingTab
 from .tabs.realtime_rendering_tab import RealtimeRenderingTab
 from .tabs.realtime_upscale_tab import RealtimeUpscaleTab
 from .tabs.settings_tab import SettingsTab
+from .tabs.timeline_tab import TimelineStudioTab
 from .tabs.upscale_tab import UpscaleTab
 
 
@@ -68,27 +69,31 @@ class MainWindow(QMainWindow):
         self.tab_neural = NeuralRenderingTab(self._settings, self.preview_engine, self)
         self.tabs.addTab(self.tab_neural, "Neural Rendering")
 
-        # Tab 2: Upscale
+        # Tab 2: Timeline Studio (Premiere Pro NLE + DLSS 5 Adjustment Layer)
+        self.tab_timeline = TimelineStudioTab(self._settings, self)
+        self.tabs.addTab(self.tab_timeline, "Timeline Studio")
+
+        # Tab 3: Upscale
         self.tab_upscale = UpscaleTab(self._settings, self)
         self.tabs.addTab(self.tab_upscale, "Upscale (VSR / HDR)")
 
-        # Tab 3: Frame Interpolation
+        # Tab 4: Frame Interpolation
         self.tab_interpolation = FrameInterpolationTab(self._settings, self)
         self.tabs.addTab(self.tab_interpolation, "Frame Interpolation")
 
-        # Tab 4: Real-Time Rendering
+        # Tab 5: Real-Time Rendering
         self.tab_realtime = RealtimeRenderingTab(self._settings, self)
         self.tabs.addTab(self.tab_realtime, "Real-Time Rendering")
 
-        # Tab 5: Real-Time Upscale
+        # Tab 6: Real-Time Upscale
         self.tab_rt_upscale = RealtimeUpscaleTab(self._settings, self)
         self.tabs.addTab(self.tab_rt_upscale, "Real-Time Upscale")
 
-        # Tab 6: Settings
+        # Tab 7: Settings
         self.tab_settings = SettingsTab(self._settings, gpu_choices, self)
         self.tabs.addTab(self.tab_settings, "Settings")
 
-        # Tab 7: About
+        # Tab 8: About
         self.tab_about = AboutTab(self._gpu_name, self._driver, self)
         self.tabs.addTab(self.tab_about, "About")
 
@@ -104,6 +109,7 @@ class MainWindow(QMainWindow):
         # Connect signals
         self.tab_neural.statusMessage.connect(self.telemetry.set_status)
         self.tab_neural.latencyUpdated.connect(self.telemetry.set_timing)
+        self.tab_timeline.statusMessage.connect(self.telemetry.set_status)
         self.tab_upscale.statusMessage.connect(self.telemetry.set_status)
         self.tab_interpolation.statusMessage.connect(self.telemetry.set_status)
         self.tab_realtime.statusMessage.connect(self.telemetry.set_status)
@@ -134,6 +140,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         """Shut down background threads and sessions gracefully."""
         self.preview_engine.shutdown()
+        self.tab_timeline.shutdown()
         self.tab_realtime.shutdown()
         self.tab_rt_upscale.shutdown()
         event.accept()
