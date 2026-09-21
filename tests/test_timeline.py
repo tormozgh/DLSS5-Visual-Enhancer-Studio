@@ -186,3 +186,30 @@ def test_compositor_with_adjustment_layer():
     finally:
         if os.path.exists(img_path):
             os.remove(img_path)
+
+
+def test_media_pool_import_and_drag_drop():
+    import os
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+
+    from src.gui.components.timeline.media_pool import MediaPoolWidget
+
+    cache = VideoFrameCache()
+    pool = MediaPoolWidget(cache)
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        img_path = f.name
+    img = np.full((120, 160, 3), 200, dtype=np.uint8)
+    cv2.imwrite(img_path, img)
+
+    try:
+        asset = pool.import_file(img_path)
+        assert asset is not None
+        assert asset.width == 160
+        assert asset.height == 120
+        assert asset.duration_frames == 150
+        assert len(pool.assets) == 1
+    finally:
+        if os.path.exists(img_path):
+            os.remove(img_path)

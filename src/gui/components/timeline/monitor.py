@@ -174,7 +174,7 @@ class TimelineMonitorWidget(QFrame):
 
         rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
-        qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
+        qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
         pixmap = QPixmap.fromImage(qimg)
 
         # Scale to viewport maintaining aspect ratio

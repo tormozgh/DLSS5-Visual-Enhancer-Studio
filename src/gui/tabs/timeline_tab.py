@@ -309,6 +309,7 @@ class TimelineStudioTab(QWidget):
         self.canvas.clipSelected.connect(self.inspector.inspect_clip)
         self.canvas.projectModified.connect(self._on_project_modified)
         self.canvas.seekRequested.connect(self.seek_frame)
+        self.canvas.mediaDropped.connect(self._on_media_dropped)
         scroll_layout.addWidget(self.canvas)
         scroll_layout.addStretch()
 

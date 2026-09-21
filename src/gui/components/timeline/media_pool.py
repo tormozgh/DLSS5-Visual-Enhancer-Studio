@@ -6,6 +6,8 @@ import json
 import os
 from typing import Callable
 
+import cv2
+import numpy as np
 from PyQt6.QtCore import QByteArray, QMimeData, QPoint, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QDrag, QIcon, QImage, QPainter, QPixmap
 from PyQt6.QtWidgets import (
@@ -144,50 +146,54 @@ class MediaPoolWidget(QFrame):
             self,
             "Import Media Files",
             "",
-            "Video & Image Files (*.mp4 *.mkv *.mov *.avi *.webm *.png *.jpg *.jpeg);;All Files (*.*)",
+            "Video & Image Files (*.mp4 *.mkv *.mov *.avi *.webm *.png *.jpg *.jpeg *.bmp *.webp *.tiff);;All Files (*.*)",
         )
         for f in files:
             self.import_file(f)
 
     def import_file(self, file_path: str) -> MediaAsset | None:
-        if not os.path.exists(file_path):
+        try:
+            if not file_path or not os.path.exists(file_path):
+                return None
+
+            # Check if already imported
+            norm_target = os.path.normcase(os.path.abspath(file_path))
+            for asset in self.assets.values():
+                if os.path.normcase(os.path.abspath(asset.file_path)) == norm_target:
+                    return asset
+
+            meta = self.frame_cache.get_media_metadata(file_path)
+            if not meta:
+                return None
+
+            total_frames, duration_sec, fps, width, height = meta
+            asset = MediaAsset.create(
+                file_path=file_path,
+                duration_frames=total_frames,
+                duration_sec=duration_sec,
+                fps=fps,
+                width=width,
+                height=height,
+            )
+            self.assets[asset.asset_id] = asset
+
+            # Generate thumbnail safely
+            thumb_bgr = self.frame_cache.generate_thumbnail(file_path, (64, 40))
+            item = MediaAssetListItem(asset, is_adjustment_layer=False)
+            if thumb_bgr is not None and thumb_bgr.size > 0:
+                rgb = cv2.cvtColor(thumb_bgr, cv2.COLOR_BGR2RGB)
+                h, w, ch = rgb.shape
+                qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
+                item.setIcon(QIcon(QPixmap.fromImage(qimg)))
+            else:
+                pix = QPixmap(64, 40)
+                pix.fill(QColor("#2563eb"))
+                item.setIcon(QIcon(pix))
+
+            self.list_widget.addItem(item)
+            return asset
+        except Exception as e:
             return None
-
-        # Check if already imported
-        for asset in self.assets.values():
-            if os.path.abspath(asset.file_path) == os.path.abspath(file_path):
-                return asset
-
-        meta = self.frame_cache.get_media_metadata(file_path)
-        if not meta:
-            return None
-
-        total_frames, duration_sec, fps, width, height = meta
-        asset = MediaAsset.create(
-            file_path=file_path,
-            duration_frames=total_frames,
-            duration_sec=duration_sec,
-            fps=fps,
-            width=width,
-            height=height,
-        )
-        self.assets[asset.asset_id] = asset
-
-        # Generate thumbnail
-        thumb_bgr = self.frame_cache.generate_thumbnail(file_path, (64, 40))
-        item = MediaAssetListItem(asset, is_adjustment_layer=False)
-        if thumb_bgr is not None:
-            rgb = cv2.cvtColor(thumb_bgr, cv2.COLOR_BGR2RGB)
-            h, w, ch = rgb.shape
-            qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
-            item.setIcon(QIcon(QPixmap.fromImage(qimg)))
-        else:
-            pix = QPixmap(64, 40)
-            pix.fill(QColor("#2563eb"))
-            item.setIcon(QIcon(pix))
-
-        self.list_widget.addItem(item)
-        return asset
 
     def _on_create_adjustment_layer_clicked(self) -> None:
         self.addAdjustmentLayerRequested.emit()

@@ -28,6 +28,7 @@ class MultiTrackCanvas(QWidget):
     clipSelected = pyqtSignal(object)  # TimelineClip | None
     projectModified = pyqtSignal()
     seekRequested = pyqtSignal(int)
+    mediaDropped = pyqtSignal(str, int, int)  # asset_id, track_id, drop_frame
 
     TRACK_HEIGHT = 48
     TRACK_GAP = 4
@@ -338,7 +339,7 @@ class MultiTrackCanvas(QWidget):
 
         for track in self.project.video_tracks:
             for c in track.clips:
-                if c != self._drag_clip:
+                if not self._drag_clip or c.clip_id != self._drag_clip.clip_id:
                     candidates.append(c.timeline_in)
                     candidates.append(c.timeline_out)
 
@@ -430,11 +431,8 @@ class MultiTrackCanvas(QWidget):
 
         elif item_type == "media":
             asset_id = payload.get("asset_id")
-            # We will retrieve asset from parent window or media pool
-            from ....timeline.models import MediaAsset
-            # Create a placeholder or query asset
-            # Media asset callback is handled via container
-            self.parent()._on_media_dropped(asset_id, target_track.track_id, drop_frame)
+            if asset_id:
+                self.mediaDropped.emit(asset_id, target_track.track_id, drop_frame)
 
         self._update_min_size()
         self.projectModified.emit()
