@@ -9,6 +9,7 @@ from PyQt6.QtCore import QPoint, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
     QDragEnterEvent,
+    QDragMoveEvent,
     QDropEvent,
     QFont,
     QKeyEvent,
@@ -20,6 +21,9 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import QMenu, QWidget
 
 from ....timeline.models import DLSSConfig, MediaAsset, TimelineClip, TimelineProject, TimelineTrack
+
+
+TRACK_HEADER_WIDTH = 70
 
 
 class MultiTrackCanvas(QWidget):
@@ -66,8 +70,8 @@ class MultiTrackCanvas(QWidget):
         self.update()
 
     def _update_min_size(self) -> None:
-        total_tracks = len(self.project.video_tracks) + len(self.project.audio_tracks)
-        h = max(240, total_tracks * (self.TRACK_HEIGHT + self.TRACK_GAP) + 60)
+        total_tracks = len(self.project.video_tracks)
+        h = max(200, total_tracks * (self.TRACK_HEIGHT + self.TRACK_GAP) + 60)
         w = max(1200, int(self.project.get_total_frames() * self.pixels_per_frame) + self.TRACK_HEADER_WIDTH + 300)
         self.setMinimumSize(w, h)
 
@@ -82,10 +86,8 @@ class MultiTrackCanvas(QWidget):
         return 10.0 + track_index * (self.TRACK_HEIGHT + self.TRACK_GAP)
 
     def _get_all_tracks_ordered(self) -> list[TimelineTrack]:
-        # Video tracks V3, V2, V1 descending then Audio tracks A1, A2
-        v_sorted = sorted(self.project.video_tracks, key=lambda t: t.track_id, reverse=True)
-        a_sorted = sorted(self.project.audio_tracks, key=lambda t: t.track_id)
-        return v_sorted + a_sorted
+        # Only video tracks V_n down to V1
+        return sorted(self.project.video_tracks, key=lambda t: t.track_id, reverse=True)
 
     def _get_track_at_y(self, y: float) -> TimelineTrack | None:
         tracks = self._get_all_tracks_ordered()
@@ -258,6 +260,13 @@ class MultiTrackCanvas(QWidget):
                 self.update()
 
         elif event.button() == Qt.MouseButton.RightButton:
+            # Check if clicked on track header
+            if event.pos().x() < self.TRACK_HEADER_WIDTH:
+                track = self._get_track_at_y(event.pos().y())
+                self._show_track_header_context_menu(track, event.globalPosition().toPoint())
+                event.accept()
+                return
+
             # Context menu (Split, Delete, Properties)
             hit = self._find_clip_at_pos(event.pos())
             if hit:
@@ -360,6 +369,26 @@ class MultiTrackCanvas(QWidget):
         elif chosen == act_delete:
             self.delete_selected_clip()
 
+    def _show_track_header_context_menu(self, track: TimelineTrack | None, pos: QPoint) -> None:
+        menu = QMenu(self)
+        menu.setStyleSheet("background: #1e293b; color: #f8fafc; border: 1px solid #334155;")
+        act_add = menu.addAction("+ Add Video Track")
+        act_del = None
+        if track and len(self.project.video_tracks) > 1:
+            act_del = menu.addAction(f"- Delete Track ({track.name})")
+
+        chosen = menu.exec(pos)
+        if chosen == act_add:
+            self.project.add_video_track()
+            self._update_min_size()
+            self.projectModified.emit()
+            self.update()
+        elif act_del and chosen == act_del and track:
+            self.project.remove_video_track(track.track_id)
+            self._update_min_size()
+            self.projectModified.emit()
+            self.update()
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key.Key_Delete or event.key() == Qt.Key.Key_Backspace:
             self.delete_selected_clip()
@@ -397,6 +426,10 @@ class MultiTrackCanvas(QWidget):
 
     # Drag & Drop handling from MediaPool
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData().hasFormat("application/x-dlss-timeline-asset"):
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
         if event.mimeData().hasFormat("application/x-dlss-timeline-asset"):
             event.acceptProposedAction()
 

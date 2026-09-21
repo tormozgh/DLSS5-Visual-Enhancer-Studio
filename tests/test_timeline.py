@@ -58,8 +58,15 @@ def test_timeline_clip_and_tracks():
 
 def test_timeline_project_and_active_clips():
     project = TimelineProject.create_default(fps=30.0, width=1920, height=1080)
-    assert len(project.video_tracks) == 3
-    assert len(project.audio_tracks) == 2
+    assert len(project.audio_tracks) == 0  # Audio tracks removed per design
+
+    # Test adding and removing video tracks
+    init_v_count = len(project.video_tracks)
+    new_track = project.add_video_track()
+    assert len(project.video_tracks) == init_v_count + 1
+    assert new_track.name == f"V{init_v_count + 1}"
+    project.remove_video_track(new_track.track_id)
+    assert len(project.video_tracks) == init_v_count
 
     track_v1 = next(t for t in project.video_tracks if t.name == "V1")
     track_v2 = next(t for t in project.video_tracks if t.name == "V2")

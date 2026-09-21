@@ -23,7 +23,7 @@ class DLSS5TimelineProcessor:
         target_size: tuple[int, int] | None = None,
         is_export: bool = False,
     ) -> np.ndarray:
-        """Apply DLSS 5 neural enhancement, super-resolution, and cinematic tone to an image.
+        """Apply DLSS 5 neural enhancement, super-resolution, tone and structure to an image.
 
         Args:
             bgr_frame: Input BGR image (uint8).
@@ -39,43 +39,70 @@ class DLSS5TimelineProcessor:
 
         # 1. Super Resolution / Neural Upscaling if target dimension is larger
         if out_w != w or out_h != h:
-            # High-order Lanczos4 interpolation with edge-preserving kernel
             processed = cv2.resize(bgr_frame, (out_w, out_h), interpolation=cv2.INTER_LANCZOS4)
         else:
             processed = bgr_frame.copy()
 
-        # 2. AI Denoise & Detail Reconstruction
-        if config.denoise > 5.0:
-            denoise_strength = config.denoise / 100.0
-            if is_export:
-                # Fast bilateral filter preserving neural edges
-                d = 5
-                sigma_color = int(denoise_strength * 30.0)
-                sigma_space = int(denoise_strength * 30.0)
-                processed = cv2.bilateralFilter(processed, d, sigma_color, sigma_space)
-            else:
-                # Optimized median/box filter for real-time scrubbing
-                ksize = 3
-                denoised = cv2.medianBlur(processed, ksize)
-                weight = denoise_strength * 0.7
-                processed = cv2.addWeighted(processed, 1.0 - weight, denoised, weight, 0)
+        # 2. Local Tone Strength & Tone Preservation (HSV / Contrast adjustment)
+        tone_str = max(0.0, min(2.0, config.local_tone_strength))
+        color_str = max(0.0, min(2.0, config.nr_color_strength))
+        if abs(tone_str - 1.0) > 0.02 or abs(color_str - 1.0) > 0.02:
+            hsv = cv2.cvtColor(processed, cv2.COLOR_BGR2HSV).astype(np.float32)
+            # Adjust saturation according to color strength
+            hsv[:, :, 1] = np.clip(hsv[:, :, 1] * color_str, 0, 255)
+            # Adjust local contrast / luminance curve according to tone strength
+            if abs(tone_str - 1.0) > 0.02:
+                v = hsv[:, :, 2] / 255.0
+                gamma = 1.0 / max(0.2, tone_str)
+                v = np.power(v, gamma)
+                hsv[:, :, 2] = np.clip(v * 255.0, 0, 255)
+            processed = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
-        # 3. ReShade Post-Processing (3D LUT, Film Grain, Tonemapping, Contrast Adaptive Sharpening)
+        # 3. Local Structure Strength & NR Intensity (High-frequency detail enhancement)
+        intensity = max(0.0, min(2.0, config.nr_intensity))
+        structure = max(0.0, min(2.0, config.local_structure_strength))
+        total_sharpen = intensity * structure
+        if total_sharpen > 0.05:
+            # Unsharp mask for crisp neural details
+            blur = cv2.GaussianBlur(processed, (0, 0), 1.5)
+            sharp_weight = min(1.0, total_sharpen * 0.4)
+            processed = cv2.addWeighted(processed, 1.0 + sharp_weight, blur, -sharp_weight, 0)
+
+        # 4. Skin Structure Strength (Negative = soft skin, Positive = pore enhancement)
+        skin_str = config.skin_structure_strength
+        if skin_str < -0.05:
+            # Subtle skin-tone bilateral smoothing
+            d = 5
+            sigma = int(abs(skin_str) * 18.0)
+            smoothed = cv2.bilateralFilter(processed, d, sigma, sigma)
+            blend_w = abs(skin_str) * 0.65
+            processed = cv2.addWeighted(processed, 1.0 - blend_w, smoothed, blend_w, 0)
+
+        # 5. Tone Preservation (Blend back toward original luminance if tone_preservation > 0)
+        if config.tone_preservation > 0.05 and processed.shape == bgr_frame.shape:
+            orig_gray = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2GRAY)
+            proc_gray = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
+            diff = orig_gray.astype(np.float32) - proc_gray.astype(np.float32)
+            for c in range(3):
+                chan = processed[:, :, c].astype(np.float32) + diff * config.tone_preservation * 0.6
+                processed[:, :, c] = np.clip(chan, 0, 255).astype(np.uint8)
+
+        # 6. ReShade Post-Processing (Color Grading, LUT, Film Grain)
         self._settings.enabled = True
         self._settings.lut_enabled = config.cinematic_tone
         self._settings.lut_name = config.reshade_preset if config.reshade_preset else "Cinematic Teal & Orange"
-        self._settings.lut_strength = min(1.0, max(0.0, config.hdr_boost * 2.0)) if config.hdr_boost else 0.85
+        self._settings.lut_strength = min(1.0, max(0.0, config.hdr_boost * 2.0)) if config.hdr_boost else 0.75
 
         self._settings.tonemap_enabled = config.cinematic_tone
-        self._settings.exposure = 0.15 * config.hdr_boost
-        self._settings.contrast = 1.0 + (config.hdr_boost * 0.15)
-        self._settings.saturation = 1.05 + (config.hdr_boost * 0.10)
+        self._settings.exposure = 0.10 * config.hdr_boost
+        self._settings.contrast = 1.0 + (config.hdr_boost * 0.12)
+        self._settings.saturation = 1.0 + (config.hdr_boost * 0.08)
 
-        self._settings.cas_enabled = config.sharpness > 5.0
-        self._settings.cas_sharpness = min(1.0, max(0.0, config.sharpness / 100.0))
+        self._settings.cas_enabled = total_sharpen > 0.1
+        self._settings.cas_sharpness = min(1.0, max(0.0, total_sharpen * 0.35))
 
-        self._settings.grain_enabled = config.cinematic_tone and is_export
-        self._settings.grain_intensity = 0.12
+        self._settings.grain_enabled = config.grain_preservation > 0.05
+        self._settings.grain_intensity = float(config.grain_preservation * 0.15)
 
         # Convert to RGBA for ReShade evaluation
         rgba = cv2.cvtColor(processed, cv2.COLOR_BGR2RGBA)
@@ -83,13 +110,7 @@ class DLSS5TimelineProcessor:
         enhanced_rgba = self._reshade.process_frame(rgba)
         enhanced_bgr = cv2.cvtColor(enhanced_rgba, cv2.COLOR_RGBA2BGR)
 
-        # 4. Neural Sharpening & Edge Boost (if sharpness is high)
-        if config.sharpness > 50.0:
-            sharp_factor = (config.sharpness - 50.0) / 100.0  # 0.0 to 0.5
-            gaussian = cv2.GaussianBlur(enhanced_bgr, (0, 0), 2.0)
-            enhanced_bgr = cv2.addWeighted(enhanced_bgr, 1.0 + sharp_factor, gaussian, -sharp_factor, 0)
-
-        # 5. Blend with input according to Opacity
+        # 7. Blend with input according to Opacity
         if config.opacity < 0.999:
             alpha = max(0.0, min(1.0, config.opacity))
             if enhanced_bgr.shape[:2] != bgr_frame.shape[:2]:

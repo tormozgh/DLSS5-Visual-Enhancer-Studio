@@ -1,25 +1,27 @@
-"""Program Monitor (Preview Viewport) displaying composited timeline frames with playback controls."""
+"""Program Monitor (Preview Viewport) displaying composited timeline frames with interactive Split View, Zoom, and Pan."""
 
 from __future__ import annotations
 
 import cv2
 import numpy as np
-from PyQt6.QtCore import QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPixmap
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
+from ..split_canvas import CanvasViewMode, SplitCanvas
+
 
 class TimelineMonitorWidget(QFrame):
-    """Program Monitor widget rendering real-time composite frames and transport controls."""
+    """Program Monitor widget rendering real-time composite frames with transport controls and SplitCanvas."""
 
     seekRequested = pyqtSignal(int)
     playToggled = pyqtSignal(bool)
@@ -35,10 +37,6 @@ class TimelineMonitorWidget(QFrame):
         self.total_frames = 900
         self.is_playing = False
         self.loop = True
-        self.split_enabled = False
-        self.split_ratio = 0.5
-
-        self._current_pixmap: QPixmap | None = None
 
         self._play_timer = QTimer(self)
         self._play_timer.timeout.connect(self._on_play_tick)
@@ -70,19 +68,63 @@ class TimelineMonitorWidget(QFrame):
 
     def _init_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
 
-        # Video Viewport Display Area
-        self.viewport = QLabel()
-        self.viewport.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.viewport.setStyleSheet("background-color: #000000; border: 1px solid #1e2025; border-radius: 4px;")
-        self.viewport.setMinimumSize(480, 270)
-        layout.addWidget(self.viewport, 1)
+        # 1. Interactive Viewport Canvas (Split, Zoom, Pan)
+        self.canvas = SplitCanvas(self)
+        self.canvas.setMinimumSize(480, 270)
+        layout.addWidget(self.canvas, 1)
 
-        # Controls & Timecode Bar
+        # 2. Viewport Toolbar (Split View / Side-by-Side / Fit / 1:1)
+        toolbar_layout = QHBoxLayout()
+        toolbar_layout.setContentsMargins(2, 0, 2, 0)
+        toolbar_layout.setSpacing(6)
+
+        self.btn_view_split = QPushButton("Split View")
+        self.btn_view_split.setCheckable(True)
+        self.btn_view_split.setChecked(True)
+        self.btn_view_split.clicked.connect(lambda: self.canvas.set_view_mode(CanvasViewMode.SPLIT))
+
+        self.btn_view_sbs = QPushButton("Side-by-Side")
+        self.btn_view_sbs.setCheckable(True)
+        self.btn_view_sbs.clicked.connect(lambda: self.canvas.set_view_mode(CanvasViewMode.SIDE_BY_SIDE))
+
+        self.view_mode_group = QButtonGroup(self)
+        self.view_mode_group.addButton(self.btn_view_split)
+        self.view_mode_group.addButton(self.btn_view_sbs)
+
+        self.btn_fit = QPushButton("Fit")
+        self.btn_fit.setToolTip("Fit video to viewport (F)")
+        self.btn_fit.clicked.connect(self.canvas.fit_to_view)
+
+        self.btn_1to1 = QPushButton("1:1")
+        self.btn_1to1.setToolTip("100% Original Pixel View")
+        self.btn_1to1.clicked.connect(self.canvas.reset_1to1)
+
+        self.btn_show_orig = QPushButton("Original")
+        self.btn_show_orig.setToolTip("Show only original composite before DLSS 5")
+        self.btn_show_orig.clicked.connect(lambda: self.canvas.set_split_ratio(1.0))
+
+        self.btn_show_dlss = QPushButton("DLSS 5")
+        self.btn_show_dlss.setToolTip("Show only DLSS 5 enhanced composite")
+        self.btn_show_dlss.clicked.connect(lambda: self.canvas.set_split_ratio(0.0))
+
+        toolbar_layout.addWidget(QLabel("View:"))
+        toolbar_layout.addWidget(self.btn_view_split)
+        toolbar_layout.addWidget(self.btn_view_sbs)
+        toolbar_layout.addSpacing(6)
+        toolbar_layout.addWidget(self.btn_fit)
+        toolbar_layout.addWidget(self.btn_1to1)
+        toolbar_layout.addWidget(self.btn_show_orig)
+        toolbar_layout.addWidget(self.btn_show_dlss)
+        toolbar_layout.addStretch()
+
+        layout.addLayout(toolbar_layout)
+
+        # 3. Transport Controls & Timecode Bar
         controls_layout = QHBoxLayout()
-        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setContentsMargins(2, 0, 2, 0)
         controls_layout.setSpacing(6)
 
         # Transport Buttons
@@ -132,24 +174,6 @@ class TimelineMonitorWidget(QFrame):
 
         controls_layout.addStretch()
 
-        # Split Preview Toggle & Slider
-        self.btn_split = QPushButton("Split Preview")
-        self.btn_split.setCheckable(True)
-        self.btn_split.setToolTip("Compare Raw Composite vs DLSS 5 Adjustment Layer")
-        self.btn_split.toggled.connect(self._on_split_toggled)
-        controls_layout.addWidget(self.btn_split)
-
-        self.slider_split = QSlider(Qt.Orientation.Horizontal)
-        self.slider_split.setRange(5, 95)
-        self.slider_split.setValue(50)
-        self.slider_split.setFixedWidth(90)
-        self.slider_split.setToolTip("Split comparison position")
-        self.slider_split.setVisible(False)
-        self.slider_split.valueChanged.connect(self._on_split_slider_changed)
-        controls_layout.addWidget(self.slider_split)
-
-        controls_layout.addSpacing(10)
-
         # Timecode Display
         self.lbl_timecode = QLabel("00:00:00:00 / 00:00:00:00 [F: 0]")
         self.lbl_timecode.setStyleSheet("color: #38bdf8; font-family: Consolas, monospace; font-size: 11px; font-weight: 700;")
@@ -157,8 +181,14 @@ class TimelineMonitorWidget(QFrame):
 
         layout.addLayout(controls_layout)
 
-    def display_frame(self, bgr_frame: np.ndarray, current_frame: int, total_frames: int) -> None:
-        """Render frame in viewport maintaining aspect ratio."""
+    def display_frame(
+        self,
+        bgr_frame: np.ndarray | None,
+        raw_bgr: np.ndarray | None = None,
+        current_frame: int = 0,
+        total_frames: int = 1,
+    ) -> None:
+        """Render composite and raw frames in SplitCanvas with zoom, pan, and interactive split."""
         self.current_frame = current_frame
         self.total_frames = max(1, total_frames)
 
@@ -172,20 +202,17 @@ class TimelineMonitorWidget(QFrame):
         if bgr_frame is None or bgr_frame.size == 0:
             return
 
-        rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
-        h, w, ch = rgb.shape
-        qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
-        pixmap = QPixmap.fromImage(qimg)
+        rgb_after = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb_after.shape
+        qimg_after = QImage(rgb_after.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
 
-        # Scale to viewport maintaining aspect ratio
-        vp_size = self.viewport.size()
-        scaled = pixmap.scaled(
-            vp_size.width(),
-            vp_size.height(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self.viewport.setPixmap(scaled)
+        if raw_bgr is not None and raw_bgr.size > 0:
+            rgb_before = cv2.cvtColor(raw_bgr, cv2.COLOR_BGR2RGB)
+            qimg_before = QImage(rgb_before.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
+        else:
+            qimg_before = qimg_after
+
+        self.canvas.set_images(qimg_before, qimg_after)
 
     def _format_timecode(self, seconds: float, frame_idx: int) -> str:
         s = int(seconds)
@@ -247,13 +274,3 @@ class TimelineMonitorWidget(QFrame):
 
     def _on_loop_toggled(self, checked: bool) -> None:
         self.loop = checked
-
-    def _on_split_toggled(self, checked: bool) -> None:
-        self.split_enabled = checked
-        self.slider_split.setVisible(checked)
-        ratio = (self.slider_split.value() / 100.0) if checked else None
-        self.splitRatioChanged.emit(ratio if ratio is not None else -1.0)
-
-    def _on_split_slider_changed(self, val: int) -> None:
-        if self.split_enabled:
-            self.splitRatioChanged.emit(val / 100.0)

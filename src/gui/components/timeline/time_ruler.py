@@ -7,12 +7,17 @@ from PyQt6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen, QPolygon
 from PyQt6.QtWidgets import QWidget
 
 
+TRACK_HEADER_WIDTH = 70  # Exactly matches MultiTrackCanvas.TRACK_HEADER_WIDTH
+
+
 class TimeRulerWidget(QWidget):
     """Interactive time ruler displaying timecode ticks, playhead needle, and In/Out points."""
 
     seekRequested = pyqtSignal(int)
     inPointChanged = pyqtSignal(int)
     outPointChanged = pyqtSignal(int)
+
+    TRACK_HEADER_WIDTH = 70
 
     def __init__(
         self,
@@ -57,10 +62,11 @@ class TimeRulerWidget(QWidget):
         self.update()
 
     def frame_to_x(self, frame: int) -> float:
-        return frame * self.pixels_per_frame
+        return self.TRACK_HEADER_WIDTH + (frame * self.pixels_per_frame)
 
     def x_to_frame(self, x: float) -> int:
-        return max(0, min(self.total_frames, int(round(x / self.pixels_per_frame))))
+        rel_x = max(0.0, x - self.TRACK_HEADER_WIDTH)
+        return max(0, min(self.total_frames, int(round(rel_x / self.pixels_per_frame))))
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -71,6 +77,17 @@ class TimeRulerWidget(QWidget):
 
         # Background
         painter.fillRect(0, 0, width, height, QColor("#16171b"))
+
+        # Header corner block aligned with track headers
+        header_rect = QRectF(0, 0, self.TRACK_HEADER_WIDTH - 2, height)
+        painter.fillRect(header_rect, QColor("#1f2229"))
+        painter.setPen(QPen(QColor("#262930"), 1))
+        painter.drawLine(self.TRACK_HEADER_WIDTH - 1, 0, self.TRACK_HEADER_WIDTH - 1, height)
+        painter.setPen(QColor("#94a3b8"))
+        font_hdr = QFont("Consolas", 8)
+        font_hdr.setBold(True)
+        painter.setFont(font_hdr)
+        painter.drawText(header_rect, Qt.AlignmentFlag.AlignCenter, f"{int(self.fps)}fps")
 
         # Shaded In/Out work area if set
         if self.in_point is not None or self.out_point is not None:

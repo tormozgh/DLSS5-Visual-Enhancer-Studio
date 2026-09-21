@@ -261,6 +261,16 @@ class TimelineStudioTab(QWidget):
         self.btn_add_adj.clicked.connect(self.add_dlss_adjustment_layer)
         tb_layout.addWidget(self.btn_add_adj)
 
+        self.btn_add_track = QPushButton("+ Add Track")
+        self.btn_add_track.setStyleSheet("background: #1e293b; color: #38bdf8; border-radius: 4px; padding: 4px 8px; font-weight: 600; font-size: 11px;")
+        self.btn_add_track.clicked.connect(self.add_video_track)
+        tb_layout.addWidget(self.btn_add_track)
+
+        self.btn_delete_track = QPushButton("- Delete Track")
+        self.btn_delete_track.setStyleSheet("background: #1e293b; color: #f87171; border-radius: 4px; padding: 4px 8px; font-size: 11px;")
+        self.btn_delete_track.clicked.connect(self.delete_top_track)
+        tb_layout.addWidget(self.btn_delete_track)
+
         tb_layout.addStretch()
 
         # Timeline Zoom Slider
@@ -385,6 +395,27 @@ class TimelineStudioTab(QWidget):
         self._on_project_modified()
         self.statusMessage.emit("Created DLSS 5 Neural Adjustment Layer", False)
 
+    def add_video_track(self) -> None:
+        """Add a new video track to the timeline."""
+        track = self.project.add_video_track()
+        self.canvas._update_min_size()
+        self.canvas.update()
+        self.statusMessage.emit(f"Added video track {track.name}", False)
+
+    def delete_top_track(self) -> None:
+        """Remove topmost video track (if more than 1 track exists)."""
+        if len(self.project.video_tracks) <= 1:
+            QMessageBox.information(self, "Cannot Delete", "At least one video track is required.")
+            return
+        top_track = max(self.project.video_tracks, key=lambda t: t.track_id)
+        self.project.remove_video_track(top_track.track_id)
+        self.canvas.selected_clip_id = None
+        self.inspector.inspect_clip(None)
+        self.canvas._update_min_size()
+        self.canvas.update()
+        self.seek_frame(self.project.playhead_frame)
+        self.statusMessage.emit(f"Removed track {top_track.name}", False)
+
     def seek_frame(self, frame: int) -> None:
         """Update playhead and re-render composite frame in Program Monitor."""
         total_f = self.project.get_total_frames()
@@ -395,12 +426,17 @@ class TimelineStudioTab(QWidget):
         self.canvas.update()
 
         # Composite frame
-        composite = self.compositor.render_frame(
+        res = self.compositor.render_frame(
             frame_idx=frame,
             is_export=False,
             split_ratio=self._current_split_ratio,
+            return_raw=True,
         )
-        self.monitor.display_frame(composite, frame, total_f)
+        if isinstance(res, tuple):
+            composite, raw = res
+        else:
+            composite, raw = res, res
+        self.monitor.display_frame(composite, raw, frame, total_f)
 
     def mark_in(self) -> None:
         frame = self.project.playhead_frame

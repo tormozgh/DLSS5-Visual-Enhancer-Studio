@@ -12,19 +12,52 @@ from typing import Any
 class DLSSConfig:
     """Configuration parameters for DLSS 5 Neural Enhancement per clip or adjustment layer."""
 
-    preset: str = "Quality"  # "Ultra Quality", "Quality", "Balanced", "Performance", "Ultra Performance"
-    scale_factor: float = 2.0  # 1.0x to 4.0x
-    sharpness: float = 65.0  # 0.0 to 100.0
-    denoise: float = 40.0  # 0.0 to 100.0
+    # Neural Rendering Core (matching Image 1)
+    nr_style: str = "Default"  # "Default", "Natural", "Cinematic"
+    scale: float = 1.0  # 1.0, 0.75, 0.50, 0.25
+    nr_intensity: float = 1.0  # 0.00 to 2.00
+    nr_passes: int = 1  # 1 to 4
+
+    # Tone & Structure
+    local_tone_strength: float = 1.0  # 0.00 to 2.00
+    local_structure_strength: float = 1.0  # 0.00 to 2.00
+    skin_structure_strength: float = -1.0  # -1.00 to 1.00
+
+    # Neural Composition
+    nr_color_strength: float = 1.0  # 0.00 to 1.00
+    tone_preservation: float = 0.0  # 0.00 to 1.00
+    face_skin_protection: float = 0.0  # 0.00 to 1.00
+    grain_preservation: float = 0.0  # 0.00 to 1.00
+    mask_feather: int = 0  # 0 to 128 px
+    automatic_mask: bool = False
+
+    # Backwards compatibility & Post-processing
+    preset: str = "Quality"
+    scale_factor: float = 2.0
+    sharpness: float = 65.0
+    denoise: float = 40.0
     cinematic_tone: bool = True
-    hdr_boost: float = 0.35  # 0.0 to 1.0
+    hdr_boost: float = 0.35
     model_name: str = "DLSS 5 Neural Reconstruction"
     reshade_preset: str = "Cinematic Realism"
-    opacity: float = 1.0  # 0.0 to 1.0
+    opacity: float = 1.0
     enabled: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "nr_style": self.nr_style,
+            "scale": self.scale,
+            "nr_intensity": self.nr_intensity,
+            "nr_passes": self.nr_passes,
+            "local_tone_strength": self.local_tone_strength,
+            "local_structure_strength": self.local_structure_strength,
+            "skin_structure_strength": self.skin_structure_strength,
+            "nr_color_strength": self.nr_color_strength,
+            "tone_preservation": self.tone_preservation,
+            "face_skin_protection": self.face_skin_protection,
+            "grain_preservation": self.grain_preservation,
+            "mask_feather": self.mask_feather,
+            "automatic_mask": self.automatic_mask,
             "preset": self.preset,
             "scale_factor": self.scale_factor,
             "sharpness": self.sharpness,
@@ -40,6 +73,19 @@ class DLSSConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> DLSSConfig:
         return cls(
+            nr_style=data.get("nr_style", "Default"),
+            scale=float(data.get("scale", 1.0)),
+            nr_intensity=float(data.get("nr_intensity", 1.0)),
+            nr_passes=int(data.get("nr_passes", 1)),
+            local_tone_strength=float(data.get("local_tone_strength", 1.0)),
+            local_structure_strength=float(data.get("local_structure_strength", 1.0)),
+            skin_structure_strength=float(data.get("skin_structure_strength", -1.0)),
+            nr_color_strength=float(data.get("nr_color_strength", 1.0)),
+            tone_preservation=float(data.get("tone_preservation", 0.0)),
+            face_skin_protection=float(data.get("face_skin_protection", 0.0)),
+            grain_preservation=float(data.get("grain_preservation", 0.0)),
+            mask_feather=int(data.get("mask_feather", 0)),
+            automatic_mask=bool(data.get("automatic_mask", False)),
             preset=data.get("preset", "Quality"),
             scale_factor=float(data.get("scale_factor", 2.0)),
             sharpness=float(data.get("sharpness", 65.0)),
@@ -216,21 +262,40 @@ class TimelineProject:
     @classmethod
     def create_default(cls, fps: float = 30.0, width: int = 1920, height: int = 1080) -> TimelineProject:
         proj = cls(fps=fps, width=width, height=height)
-        # Default tracks: V3, V2, V1 and A1, A2
+        # Default tracks: V3, V2, V1 (Audio tracks removed as requested)
         proj.video_tracks = [
             TimelineTrack(track_id=3, name="V3", track_type="video"),
             TimelineTrack(track_id=2, name="V2", track_type="video"),
             TimelineTrack(track_id=1, name="V1", track_type="video"),
         ]
-        proj.audio_tracks = [
-            TimelineTrack(track_id=1, name="A1", track_type="audio"),
-            TimelineTrack(track_id=2, name="A2", track_type="audio"),
-        ]
+        proj.audio_tracks = []
         return proj
+
+    def add_video_track(self, name: str | None = None) -> TimelineTrack:
+        """Add a new video track on top of the timeline."""
+        existing_ids = [t.track_id for t in self.video_tracks]
+        next_id = max(existing_ids) + 1 if existing_ids else 1
+        track_name = name or f"V{next_id}"
+        new_track = TimelineTrack(track_id=next_id, name=track_name, track_type="video")
+        self.video_tracks.append(new_track)
+        return new_track
+
+    def remove_video_track(self, track_id: int | None = None) -> bool:
+        """Remove a video track (highest or specified by track_id). Keeps at least 1 track."""
+        if len(self.video_tracks) <= 1:
+            return False
+        if track_id is None:
+            target = max(self.video_tracks, key=lambda t: t.track_id)
+        else:
+            target = next((t for t in self.video_tracks if t.track_id == track_id), None)
+            if not target:
+                return False
+        self.video_tracks.remove(target)
+        return True
 
     def get_total_frames(self) -> int:
         max_frame = 0
-        for track in self.video_tracks + self.audio_tracks:
+        for track in self.video_tracks:
             for clip in track.clips:
                 if clip.timeline_out > max_frame:
                     max_frame = clip.timeline_out
@@ -240,7 +305,7 @@ class TimelineProject:
         return self.get_total_frames() / max(1.0, self.fps)
 
     def find_clip_by_id(self, clip_id: str) -> tuple[TimelineTrack, TimelineClip] | None:
-        for track in self.video_tracks + self.audio_tracks:
+        for track in self.video_tracks:
             for clip in track.clips:
                 if clip.clip_id == clip_id:
                     return track, clip

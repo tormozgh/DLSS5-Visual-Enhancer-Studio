@@ -24,17 +24,19 @@ class TimelineCompositor:
         target_size: tuple[int, int] | None = None,
         is_export: bool = False,
         split_ratio: float | None = None,
-    ) -> np.ndarray:
+        return_raw: bool = False,
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         """Render composite timeline at frame_idx.
 
         Args:
             frame_idx: Current timeline frame index.
             target_size: (width, height) of final output. Defaults to project resolution.
             is_export: True for production export, False for preview scrubbing.
-            split_ratio: If set (0.0 to 1.0), renders a split-screen before/after comparison.
+            split_ratio: Legacy split-screen ratio (if used directly).
+            return_raw: If True, returns (enhanced_canvas, raw_canvas) for interactive SplitCanvas.
 
         Returns:
-            BGR uint8 numpy array of the composited timeline.
+            BGR uint8 numpy array, or (enhanced_canvas, raw_canvas) if return_raw is True.
         """
         width, height = target_size if target_size else (self.project.width, self.project.height)
 
@@ -45,7 +47,7 @@ class TimelineCompositor:
         # Query all active video clips at this frame sorted from bottom (V1) to top (V_n)
         active_clips = self.project.get_active_video_clips_at(frame_idx)
         if not active_clips:
-            return canvas
+            return (canvas, raw_pre_adjustment_canvas) if return_raw else canvas
 
         has_adjustment_layer = any(c.clip_type == "adjustment_layer" for _, c in active_clips)
 
@@ -97,6 +99,8 @@ class TimelineCompositor:
             comparison[:, :split_x] = raw_pre_adjustment_canvas[:, :split_x]
             # Draw vertical divider line
             cv2.line(comparison, (split_x, 0), (split_x, height), (0, 255, 255), 2)
-            return comparison
+            return (comparison, raw_pre_adjustment_canvas) if return_raw else comparison
 
+        if return_raw:
+            return canvas, raw_pre_adjustment_canvas
         return canvas

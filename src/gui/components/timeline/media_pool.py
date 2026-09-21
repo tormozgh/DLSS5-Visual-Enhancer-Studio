@@ -46,6 +46,40 @@ class MediaAssetListItem(QListWidgetItem):
             self.setToolTip(f"File: {asset.file_path}\nTotal Frames: {asset.duration_frames}")
 
 
+class DraggableMediaListWidget(QListWidget):
+    """List widget supporting reliable drag initiation with custom MIME data."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._drag_start_pos = QPoint()
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start_pos = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            dist = (event.position().toPoint() - self._drag_start_pos).manhattanLength()
+            if dist >= 4:
+                item = self.itemAt(self._drag_start_pos) or self.currentItem()
+                if isinstance(item, MediaAssetListItem):
+                    drag = QDrag(self)
+                    mime = QMimeData()
+                    if item.is_adjustment_layer:
+                        payload = {"type": "adjustment_layer"}
+                    elif item.asset:
+                        payload = {"type": "media", "asset_id": item.asset.asset_id}
+                    else:
+                        payload = {}
+                    mime.setData("application/x-dlss-timeline-asset", QByteArray(json.dumps(payload).encode("utf-8")))
+                    drag.setMimeData(mime)
+                    drag.setPixmap(item.icon().pixmap(48, 30))
+                    drag.exec(Qt.DropAction.CopyAction)
+                    return
+        super().mouseMoveEvent(event)
+
+
 class MediaPoolWidget(QFrame):
     """Media Pool widget allowing users to import, preview, and drag clips into timeline."""
 
@@ -119,7 +153,7 @@ class MediaPoolWidget(QFrame):
         layout.addLayout(btn_bar)
 
         # Assets List
-        self.list_widget = QListWidget()
+        self.list_widget = DraggableMediaListWidget(self)
         self.list_widget.setIconSize(QSize(64, 40))
         self.list_widget.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.list_widget.setDragEnabled(True)
