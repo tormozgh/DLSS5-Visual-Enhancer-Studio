@@ -220,3 +220,70 @@ def test_media_pool_import_and_drag_drop():
     finally:
         if os.path.exists(img_path):
             os.remove(img_path)
+
+
+def test_sequence_settings_and_reshade_fx():
+    from src.timeline.models import SequenceSettings, ReShadeConfig
+
+    # Sequence settings
+    seq = SequenceSettings(name="Cinema Master 4K", width=3840, height=2160, fps=24.0)
+    d = seq.to_dict()
+    assert d["width"] == 3840
+    seq2 = SequenceSettings.from_dict(d)
+    assert seq2.fps == 24.0
+
+    # Project sequence integration
+    proj = TimelineProject.create_default(fps=24.0, width=3840, height=2160, sequence_name="Cinema Master 4K")
+    assert proj.sequence.name == "Cinema Master 4K"
+    assert proj.width == 3840
+
+    # ReShade config
+    rcfg = ReShadeConfig(lut_name="Cyberpunk Neon", exposure=0.3, contrast=1.15)
+    rd = rcfg.to_dict()
+    assert rd["lut_name"] == "Cyberpunk Neon"
+    rcfg2 = ReShadeConfig.from_dict(rd)
+    assert abs(rcfg2.exposure - 0.3) < 0.01
+
+    # FX Layer creation
+    fx_dlss = TimelineClip.create_fx_layer(track_id=2, timeline_in=0, duration_frames=60, fx_type="dlss5")
+    assert fx_dlss.fx_type == "dlss5"
+    assert fx_dlss.clip_type == "fx_layer"
+
+    fx_reshade = TimelineClip.create_fx_layer(track_id=2, timeline_in=0, duration_frames=60, fx_type="reshade")
+    assert fx_reshade.fx_type == "reshade"
+    assert fx_reshade.color == "#0ea5e9"
+
+    # Processor evaluation
+    proc = DLSS5TimelineProcessor()
+    frame = np.full((120, 160, 3), 150, dtype=np.uint8)
+    out_rs = proc.process_reshade_frame(frame, rcfg)
+    assert out_rs is not None
+    assert out_rs.shape == frame.shape
+
+
+def test_original_preview_non_black_without_fx_layer():
+    cache = VideoFrameCache()
+    proj = TimelineProject.create_default(fps=30.0, width=320, height=240)
+    track_v1 = next(t for t in proj.video_tracks if t.name == "V1")
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        img_path = f.name
+    img = np.full((240, 320, 3), 180, dtype=np.uint8)
+    cv2.imwrite(img_path, img)
+
+    try:
+        asset = MediaAsset.create(file_path=img_path, duration_frames=60, duration_sec=2.0, fps=30.0, width=320, height=240)
+        clip_v1 = TimelineClip.create_media_clip(asset, track_id=1, timeline_in=0)
+        track_v1.add_clip(clip_v1)
+
+        comp = TimelineCompositor(proj, cache)
+        # Without any FX layer, return_raw=True must yield non-black original
+        composite, raw = comp.render_frame(0, target_size=(320, 240), return_raw=True)
+        assert composite is not None
+        assert raw is not None
+        assert raw.max() > 0, "Original preview frame must not be black when media footage is present!"
+        assert np.array_equal(composite, raw), "Without FX layer, composite and original should both reflect footage"
+    finally:
+        if os.path.exists(img_path):
+            os.remove(img_path)
+

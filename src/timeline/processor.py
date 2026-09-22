@@ -1,4 +1,4 @@
-"""DLSS 5 Neural Processing Engine for Timeline Clips and Adjustment Layers."""
+"""DLSS 5 and ReShade FX Neural Processing Engine for Timeline Clips and Adjustment Layers."""
 
 from __future__ import annotations
 
@@ -6,11 +6,11 @@ import cv2
 import numpy as np
 
 from ..core.reshade.effects import ReShadePostProcessor, ReShadeSettings
-from .models import DLSSConfig
+from .models import DLSSConfig, ReShadeConfig
 
 
 class DLSS5TimelineProcessor:
-    """Evaluates DLSS 5 and Neural Rendering enhancement on composite video frames."""
+    """Evaluates DLSS 5 Neural Rendering and ReShade FX enhancement on composite video frames."""
 
     def __init__(self) -> None:
         self._reshade = ReShadePostProcessor()
@@ -118,5 +118,58 @@ class DLSS5TimelineProcessor:
             else:
                 base_resized = bgr_frame
             enhanced_bgr = cv2.addWeighted(enhanced_bgr, alpha, base_resized, 1.0 - alpha, 0)
+
+        return enhanced_bgr
+
+    def process_reshade_frame(
+        self,
+        bgr_frame: np.ndarray,
+        config: ReShadeConfig,
+        target_size: tuple[int, int] | None = None,
+        is_export: bool = False,
+    ) -> np.ndarray:
+        """Apply full ReShade FX shader chain (3D LUT, Film Grain, Tonemap/Exposure, CAS Sharpening)."""
+        if not config.enabled or bgr_frame is None or bgr_frame.size == 0:
+            return bgr_frame
+
+        h, w = bgr_frame.shape[:2]
+        out_w, out_h = target_size if target_size else (w, h)
+
+        if out_w != w or out_h != h:
+            processed = cv2.resize(bgr_frame, (out_w, out_h), interpolation=cv2.INTER_LANCZOS4)
+        else:
+            processed = bgr_frame.copy()
+
+        # Configure ReShadeSettings
+        self._settings.enabled = True
+        self._settings.lut_enabled = config.lut_enabled
+        self._settings.lut_name = config.lut_name
+        self._settings.lut_strength = config.lut_strength
+
+        self._settings.tonemap_enabled = config.tonemap_enabled
+        self._settings.exposure = config.exposure
+        self._settings.contrast = config.contrast
+        self._settings.saturation = config.saturation
+        self._settings.color_temperature = config.color_temperature
+
+        self._settings.cas_enabled = config.cas_enabled
+        self._settings.cas_sharpness = config.cas_sharpness
+
+        self._settings.grain_enabled = config.grain_enabled
+        self._settings.grain_intensity = config.grain_intensity
+        self._settings.grain_size = config.grain_size
+        self._settings.grain_colored = config.grain_colored
+
+        # Convert to RGBA for ReShade evaluation
+        rgba = cv2.cvtColor(processed, cv2.COLOR_BGR2RGBA)
+        self._reshade.settings = self._settings
+        enhanced_rgba = self._reshade.process_frame(rgba)
+        enhanced_bgr = cv2.cvtColor(enhanced_rgba, cv2.COLOR_RGBA2BGR)
+
+        # Optional Bloom / Glow effect if bloom_intensity > 0.0
+        if config.bloom_intensity > 0.05:
+            bloom_k = 15
+            blurred = cv2.GaussianBlur(enhanced_bgr, (bloom_k, bloom_k), 0)
+            enhanced_bgr = cv2.addWeighted(enhanced_bgr, 1.0, blurred, config.bloom_intensity * 0.4, 0)
 
         return enhanced_bgr

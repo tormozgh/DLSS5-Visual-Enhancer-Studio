@@ -1,4 +1,4 @@
-"""Timeline Studio Tab: Premiere-style NLE multi-track editor, Media Pool, and DLSS 5 Adjustment Layer workflow."""
+"""Timeline Studio Tab: Premiere-style NLE multi-track editor, Media Pool, and DLSS 5 / ReShade FX Adjustment Layer workflow."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -29,12 +30,154 @@ from ...settings.models import UISettings
 from ...timeline.compositor import TimelineCompositor
 from ...timeline.export_worker import TimelineExportWorker
 from ...timeline.frame_cache import VideoFrameCache
-from ...timeline.models import MediaAsset, TimelineClip, TimelineProject
+from ...timeline.models import MediaAsset, SequenceSettings, TimelineClip, TimelineProject
 from ..components.timeline.inspector import ClipInspectorWidget
 from ..components.timeline.media_pool import MediaPoolWidget
 from ..components.timeline.monitor import TimelineMonitorWidget
 from ..components.timeline.time_ruler import TimeRulerWidget
 from ..components.timeline.track_canvas import MultiTrackCanvas
+
+
+class SequenceSettingsDialog(QDialog):
+    """Modal dialog for creating a new sequence or adjusting active sequence settings."""
+
+    def __init__(
+        self,
+        current_settings: SequenceSettings | None = None,
+        is_new: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("New Sequence" if is_new else "Sequence Settings")
+        self.resize(460, 340)
+        self.settings = current_settings or SequenceSettings()
+        self.is_new = is_new
+
+        self.setStyleSheet(
+            "QDialog { background-color: #121316; color: #f8fafc; }"
+            "QLabel { color: #cbd5e1; font-size: 11px; }"
+            "QLineEdit, QComboBox, QSpinBox {"
+            "  background-color: #1a1c22; color: #f8fafc; border: 1px solid #2d313b; border-radius: 4px; padding: 4px 6px; font-size: 11px;"
+            "}"
+            "QPushButton { background: #2563eb; color: white; border-radius: 4px; padding: 6px 14px; font-weight: 600; font-size: 11px; }"
+            "QPushButton:hover { background: #1d4ed8; }"
+        )
+
+        self._init_ui()
+
+    def _init_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        hdr = QLabel("New Video Sequence Setup" if self.is_new else "Sequence Settings")
+        hdr.setStyleSheet("font-size: 14px; font-weight: bold; color: #38bdf8;")
+        layout.addWidget(hdr)
+
+        form = QFormLayout()
+        form.setSpacing(8)
+
+        # Sequence Name
+        self.txt_name = QLineEdit(self.settings.name)
+        form.addRow("Sequence Name:", self.txt_name)
+
+        # Presets
+        self.cmb_preset = QComboBox()
+        self.presets = [
+            ("1080p Full HD (1920x1080 16:9)", 1920, 1080, 30.0),
+            ("4K UHD (3840x2160 16:9)", 3840, 2160, 30.0),
+            ("2K QHD (2560x1440 16:9)", 2560, 1440, 30.0),
+            ("Vertical Social (1080x1920 9:16)", 1080, 1920, 30.0),
+            ("720p HD (1280x720 16:9)", 1280, 720, 30.0),
+            ("8K Ultra HD (7680x4320 16:9)", 7680, 4320, 30.0),
+            ("Custom Dimensions", 0, 0, 0),
+        ]
+        for name, _, _, _ in self.presets:
+            self.cmb_preset.addItem(name)
+        self.cmb_preset.currentIndexChanged.connect(self._on_preset_changed)
+        form.addRow("Preset:", self.cmb_preset)
+
+        # Resolution spinboxes
+        res_row = QHBoxLayout()
+        self.spn_w = QSpinBox()
+        self.spn_w.setRange(256, 16384)
+        self.spn_w.setSingleStep(2)
+        self.spn_w.setValue(self.settings.width)
+
+        self.spn_h = QSpinBox()
+        self.spn_h.setRange(256, 16384)
+        self.spn_h.setSingleStep(2)
+        self.spn_h.setValue(self.settings.height)
+
+        res_row.addWidget(QLabel("Width:"))
+        res_row.addWidget(self.spn_w, 1)
+        res_row.addWidget(QLabel("Height:"))
+        res_row.addWidget(self.spn_h, 1)
+        form.addRow("Frame Size:", res_row)
+
+        # Timebase / Frame Rate
+        self.cmb_fps = QComboBox()
+        self.fps_options = [
+            ("23.976 fps (Cinema 24p)", 23.976),
+            ("24.0 fps (Standard Film)", 24.0),
+            ("25.0 fps (PAL Broadcast)", 25.0),
+            ("29.97 fps (NTSC Broadcast)", 29.97),
+            ("30.0 fps (Standard Web)", 30.0),
+            ("50.0 fps (PAL High Speed)", 50.0),
+            ("59.94 fps (NTSC 60p Broadcast)", 59.94),
+            ("60.0 fps (Gaming / High 60p)", 60.0),
+            ("120.0 fps (Ultra High Speed)", 120.0),
+        ]
+        cur_fps = self.settings.fps
+        matched_fps_idx = 4
+        for i, (label, val) in enumerate(self.fps_options):
+            self.cmb_fps.addItem(label, val)
+            if abs(val - cur_fps) < 0.05:
+                matched_fps_idx = i
+        self.cmb_fps.setCurrentIndex(matched_fps_idx)
+        form.addRow("Timebase (FPS):", self.cmb_fps)
+
+        lbl_pixel = QLabel("Square Pixels (1.0)")
+        lbl_pixel.setStyleSheet("color: #94a3b8;")
+        form.addRow("Pixel Aspect:", lbl_pixel)
+
+        layout.addLayout(form)
+        layout.addStretch()
+
+        # Dialog Buttons
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.setStyleSheet("background: #334155; color: white;")
+        btn_cancel.clicked.connect(self.reject)
+        btn_row.addWidget(btn_cancel)
+
+        btn_ok = QPushButton("Create Sequence" if self.is_new else "Apply Settings")
+        btn_ok.clicked.connect(self.accept)
+        btn_row.addWidget(btn_ok)
+        layout.addLayout(btn_row)
+
+        # Match initial preset
+        for i, (p_name, pw, ph, _) in enumerate(self.presets):
+            if pw == self.settings.width and ph == self.settings.height:
+                self.cmb_preset.setCurrentIndex(i)
+                break
+
+    def _on_preset_changed(self, idx: int) -> None:
+        if idx < len(self.presets) - 1:
+            _, w, h, _ = self.presets[idx]
+            self.spn_w.setValue(w)
+            self.spn_h.setValue(h)
+
+    def get_settings(self) -> SequenceSettings:
+        fps_val = float(self.cmb_fps.currentData() or 30.0)
+        return SequenceSettings(
+            name=self.txt_name.text().strip() or "Sequence 01",
+            width=self.spn_w.value(),
+            height=self.spn_h.value(),
+            fps=fps_val,
+            preset_name=self.cmb_preset.currentText(),
+        )
 
 
 class TimelineExportDialog(QDialog):
@@ -189,7 +332,7 @@ class TimelineStudioTab(QWidget):
         self.settings = settings
 
         # Core State
-        self.project = TimelineProject.create_default(fps=30.0, width=1920, height=1080)
+        self.project = TimelineProject.create_default(fps=30.0, width=1920, height=1080, sequence_name="Sequence 01")
         self.frame_cache = VideoFrameCache()
         self.compositor = TimelineCompositor(self.project, self.frame_cache)
         self._current_split_ratio: float | None = None
@@ -202,18 +345,17 @@ class TimelineStudioTab(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # Vertical Splitter: Top (Workspace panels) vs Bottom (Multi-track timeline)
+        # ---------------- TOP WORKSPACE SECTION ----------------
         vert_splitter = QSplitter(Qt.Orientation.Vertical)
         vert_splitter.setHandleWidth(4)
 
-        # ---------------- TOP WORKSPACE SECTION ----------------
         top_splitter = QSplitter(Qt.Orientation.Horizontal)
         top_splitter.setHandleWidth(4)
 
         # 1. Left: Media Pool
         self.media_pool = MediaPoolWidget(self.frame_cache, self)
         self.media_pool.assetDoubleClicked.connect(self._on_asset_double_clicked)
-        self.media_pool.addAdjustmentLayerRequested.connect(self.add_dlss_adjustment_layer)
+        self.media_pool.addAdjustmentLayerRequested.connect(self.add_fx_layer)
         top_splitter.addWidget(self.media_pool)
 
         # 2. Center: Program Monitor Viewport
@@ -238,9 +380,34 @@ class TimelineStudioTab(QWidget):
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.setSpacing(0)
 
-        # Timeline Header / Tools Bar
+        # 1. Sequence Info & Setup Bar (Premiere-style)
+        seq_bar = QFrame()
+        seq_bar.setStyleSheet("background-color: #0f1013; border-top: 1px solid #23252a; border-bottom: 1px solid #1a1c22; padding: 3px 8px;")
+        sb_layout = QHBoxLayout(seq_bar)
+        sb_layout.setContentsMargins(6, 2, 6, 2)
+        sb_layout.setSpacing(8)
+
+        self.lbl_seq_badge = QLabel("Sequence: Sequence 01 [1920x1080 @ 30.00 fps]")
+        self.lbl_seq_badge.setStyleSheet("color: #38bdf8; font-weight: 700; font-size: 11px;")
+        sb_layout.addWidget(self.lbl_seq_badge)
+
+        sb_layout.addStretch()
+
+        self.btn_seq_settings = QPushButton("Sequence Settings...")
+        self.btn_seq_settings.setStyleSheet("background: #1e293b; color: #cbd5e1; border-radius: 4px; padding: 3px 8px; font-size: 11px; font-weight: 600;")
+        self.btn_seq_settings.clicked.connect(self.open_sequence_settings)
+        sb_layout.addWidget(self.btn_seq_settings)
+
+        self.btn_new_seq = QPushButton("New Sequence...")
+        self.btn_new_seq.setStyleSheet("background: #1e293b; color: #cbd5e1; border-radius: 4px; padding: 3px 8px; font-size: 11px; font-weight: 600;")
+        self.btn_new_seq.clicked.connect(self.create_new_sequence)
+        sb_layout.addWidget(self.btn_new_seq)
+
+        bottom_layout.addWidget(seq_bar)
+
+        # 2. Timeline Tools Bar
         tools_bar = QFrame()
-        tools_bar.setStyleSheet("background-color: #14161b; border-top: 1px solid #23252a; border-bottom: 1px solid #23252a; padding: 4px 8px;")
+        tools_bar.setStyleSheet("background-color: #14161b; border-bottom: 1px solid #23252a; padding: 4px 8px;")
         tb_layout = QHBoxLayout(tools_bar)
         tb_layout.setContentsMargins(4, 2, 4, 2)
         tb_layout.setSpacing(8)
@@ -256,10 +423,16 @@ class TimelineStudioTab(QWidget):
         self.btn_delete_clip.clicked.connect(self._on_delete_tool_clicked)
         tb_layout.addWidget(self.btn_delete_clip)
 
-        self.btn_add_adj = QPushButton("+ Add DLSS 5 Layer")
-        self.btn_add_adj.setStyleSheet("background: #7c3aed; color: white; border-radius: 4px; padding: 4px 8px; font-weight: 600; font-size: 11px;")
-        self.btn_add_adj.clicked.connect(self.add_dlss_adjustment_layer)
-        tb_layout.addWidget(self.btn_add_adj)
+        # FX Layer Buttons
+        self.btn_add_dlss_fx = QPushButton("+ Add DLSS 5 Layer")
+        self.btn_add_dlss_fx.setStyleSheet("background: #7c3aed; color: white; border-radius: 4px; padding: 4px 8px; font-weight: 600; font-size: 11px;")
+        self.btn_add_dlss_fx.clicked.connect(lambda: self.add_fx_layer("dlss5"))
+        tb_layout.addWidget(self.btn_add_dlss_fx)
+
+        self.btn_add_reshade_fx = QPushButton("+ Add ReShade Layer")
+        self.btn_add_reshade_fx.setStyleSheet("background: #0284c7; color: white; border-radius: 4px; padding: 4px 8px; font-weight: 600; font-size: 11px;")
+        self.btn_add_reshade_fx.clicked.connect(lambda: self.add_fx_layer("reshade"))
+        tb_layout.addWidget(self.btn_add_reshade_fx)
 
         self.btn_add_track = QPushButton("+ Add Track")
         self.btn_add_track.setStyleSheet("background: #1e293b; color: #38bdf8; border-radius: 4px; padding: 4px 8px; font-weight: 600; font-size: 11px;")
@@ -334,6 +507,42 @@ class TimelineStudioTab(QWidget):
         # Render initial empty frame
         self.seek_frame(0)
 
+    def open_sequence_settings(self) -> None:
+        """Open settings dialog to adjust the current sequence resolution, framerate, and name."""
+        diag = SequenceSettingsDialog(self.project.sequence, is_new=False, parent=self)
+        if diag.exec() == QDialog.DialogCode.Accepted:
+            new_seq = diag.get_settings()
+            self.project.update_sequence(new_seq)
+            self._apply_sequence_update()
+            self.statusMessage.emit(f"Updated sequence: {new_seq.name} ({new_seq.width}x{new_seq.height} @ {new_seq.fps:.2f} fps)", False)
+
+    def create_new_sequence(self) -> None:
+        """Create a fresh sequence with clear project dimensions and empty tracks."""
+        diag = SequenceSettingsDialog(None, is_new=True, parent=self)
+        if diag.exec() == QDialog.DialogCode.Accepted:
+            new_seq = diag.get_settings()
+            self.project = TimelineProject.create_default(
+                fps=new_seq.fps,
+                width=new_seq.width,
+                height=new_seq.height,
+                sequence_name=new_seq.name,
+            )
+            self.compositor.project = self.project
+            self.canvas.project = self.project
+            self.canvas.selected_clip_id = None
+            self.inspector.inspect_clip(None)
+            self._apply_sequence_update()
+            self.statusMessage.emit(f"Created new sequence: {new_seq.name}", False)
+
+    def _apply_sequence_update(self) -> None:
+        seq = self.project.sequence
+        self.lbl_seq_badge.setText(f"Sequence: {seq.name} [{seq.width}x{seq.height} @ {seq.fps:.2f} fps]")
+        self.ruler.fps = seq.fps
+        self.monitor.fps = seq.fps
+        self.canvas._update_min_size()
+        self.canvas.update()
+        self.seek_frame(self.project.playhead_frame)
+
     def _on_media_dropped(self, asset_id: str, track_id: int, drop_frame: int) -> None:
         """Callback from track canvas when an asset is dragged and dropped from MediaPool."""
         asset = self.media_pool.assets.get(asset_id)
@@ -349,6 +558,7 @@ class TimelineStudioTab(QWidget):
                 asset=asset,
                 track_id=target_track.track_id,
                 timeline_in=drop_frame,
+                timeline_fps=self.project.fps,
             )
             target_track.add_clip(clip)
             self.canvas.selected_clip_id = clip.clip_id
@@ -366,6 +576,7 @@ class TimelineStudioTab(QWidget):
             asset=asset,
             track_id=v1.track_id,
             timeline_in=self.project.playhead_frame,
+            timeline_fps=self.project.fps,
         )
         v1.add_clip(clip)
         self.canvas.selected_clip_id = clip.clip_id
@@ -373,9 +584,8 @@ class TimelineStudioTab(QWidget):
         self._on_project_modified()
         self.statusMessage.emit(f"Placed {asset.name} on track {v1.name}", False)
 
-    def add_dlss_adjustment_layer(self) -> None:
-        """Create a new DLSS 5 Adjustment Layer on track V2 (or topmost video track)."""
-        # Place on V2 by default, or V3 if V2 is busy
+    def add_fx_layer(self, fx_type: str = "dlss5") -> None:
+        """Create a new FX Adjustment Layer (DLSS 5 or ReShade) on track V2 (or topmost video track)."""
         v_track = next((t for t in self.project.video_tracks if t.track_id == 2), None)
         if not v_track and self.project.video_tracks:
             v_track = self.project.video_tracks[0]
@@ -383,17 +593,23 @@ class TimelineStudioTab(QWidget):
         if not v_track:
             return
 
-        clip = TimelineClip.create_adjustment_layer(
+        duration = int(round(5.0 * self.project.fps))
+        clip = TimelineClip.create_fx_layer(
             track_id=v_track.track_id,
             timeline_in=self.project.playhead_frame,
-            duration_frames=150,  # 5 seconds at 30 fps
-            name="DLSS 5 Adjustment Layer",
+            duration_frames=duration,
+            fx_type=fx_type,
         )
         v_track.add_clip(clip)
         self.canvas.selected_clip_id = clip.clip_id
         self.inspector.inspect_clip(clip)
         self._on_project_modified()
-        self.statusMessage.emit("Created DLSS 5 Neural Adjustment Layer", False)
+        fx_label = "ReShade FX Layer" if fx_type == "reshade" else "DLSS 5 Neural Layer"
+        self.statusMessage.emit(f"Created {fx_label}", False)
+
+    def add_dlss_adjustment_layer(self) -> None:
+        """Compatibility alias."""
+        self.add_fx_layer("dlss5")
 
     def add_video_track(self) -> None:
         """Add a new video track to the timeline."""
@@ -471,7 +687,6 @@ class TimelineStudioTab(QWidget):
         self.seek_frame(self.project.playhead_frame)
 
     def _on_zoom_changed(self, val: int) -> None:
-        # Scale: 2 to 40 -> 0.2 to 4.0 px/frame
         ppf = val / 10.0
         self.ruler.set_zoom(ppf)
         self.canvas.set_zoom(ppf)

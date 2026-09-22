@@ -1,4 +1,4 @@
-"""Timeline Data Models for NLE Video Editing and DLSS 5 Adjustment Layers."""
+"""Timeline Data Models for NLE Video Editing and DLSS 5 / ReShade FX Adjustment Layers."""
 
 from __future__ import annotations
 
@@ -100,6 +100,102 @@ class DLSSConfig:
 
 
 @dataclass
+class ReShadeConfig:
+    """Configuration for ReShade post-processing FX on timeline clips/layers."""
+
+    enabled: bool = True
+    lut_enabled: bool = True
+    lut_name: str = "Cinematic Teal & Orange"
+    lut_strength: float = 0.85
+    tonemap_enabled: bool = True
+    exposure: float = 0.0  # -2.0 to +2.0 EV
+    contrast: float = 1.05  # 0.5 to 2.0
+    saturation: float = 1.10  # 0.0 to 2.0
+    color_temperature: float = 0.0  # -1.0 to +1.0
+    cas_enabled: bool = True
+    cas_sharpness: float = 0.40  # 0.0 to 1.0
+    grain_enabled: bool = True
+    grain_intensity: float = 0.18  # 0.0 to 1.0
+    grain_size: float = 1.5  # 1.0 to 3.0
+    grain_colored: bool = False
+    hdr_boost: float = 0.35  # 0.0 to 1.0
+    bloom_intensity: float = 0.0  # 0.0 to 1.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "lut_enabled": self.lut_enabled,
+            "lut_name": self.lut_name,
+            "lut_strength": self.lut_strength,
+            "tonemap_enabled": self.tonemap_enabled,
+            "exposure": self.exposure,
+            "contrast": self.contrast,
+            "saturation": self.saturation,
+            "color_temperature": self.color_temperature,
+            "cas_enabled": self.cas_enabled,
+            "cas_sharpness": self.cas_sharpness,
+            "grain_enabled": self.grain_enabled,
+            "grain_intensity": self.grain_intensity,
+            "grain_size": self.grain_size,
+            "grain_colored": self.grain_colored,
+            "hdr_boost": self.hdr_boost,
+            "bloom_intensity": self.bloom_intensity,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ReShadeConfig:
+        return cls(
+            enabled=bool(data.get("enabled", True)),
+            lut_enabled=bool(data.get("lut_enabled", True)),
+            lut_name=str(data.get("lut_name", "Cinematic Teal & Orange")),
+            lut_strength=float(data.get("lut_strength", 0.85)),
+            tonemap_enabled=bool(data.get("tonemap_enabled", True)),
+            exposure=float(data.get("exposure", 0.0)),
+            contrast=float(data.get("contrast", 1.05)),
+            saturation=float(data.get("saturation", 1.10)),
+            color_temperature=float(data.get("color_temperature", 0.0)),
+            cas_enabled=bool(data.get("cas_enabled", True)),
+            cas_sharpness=float(data.get("cas_sharpness", 0.40)),
+            grain_enabled=bool(data.get("grain_enabled", True)),
+            grain_intensity=float(data.get("grain_intensity", 0.18)),
+            grain_size=float(data.get("grain_size", 1.5)),
+            grain_colored=bool(data.get("grain_colored", False)),
+            hdr_boost=float(data.get("hdr_boost", 0.35)),
+            bloom_intensity=float(data.get("bloom_intensity", 0.0)),
+        )
+
+
+@dataclass
+class SequenceSettings:
+    """Settings defining a video timeline sequence (timebase, frame size, aspect)."""
+
+    name: str = "Sequence 01"
+    width: int = 1920
+    height: int = 1080
+    fps: float = 30.0
+    preset_name: str = "1080p Full HD (1920x1080 30fps)"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "width": self.width,
+            "height": self.height,
+            "fps": self.fps,
+            "preset_name": self.preset_name,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SequenceSettings:
+        return cls(
+            name=str(data.get("name", "Sequence 01")),
+            width=int(data.get("width", 1920)),
+            height=int(data.get("height", 1080)),
+            fps=float(data.get("fps", 30.0)),
+            preset_name=str(data.get("preset_name", "1080p Full HD (1920x1080 30fps)")),
+        )
+
+
+@dataclass
 class MediaAsset:
     """Imported media asset inside the project bin/media pool."""
 
@@ -146,7 +242,7 @@ class TimelineClip:
     """A clip residing on a track in the multi-track timeline."""
 
     clip_id: str
-    clip_type: str  # "media" | "adjustment_layer"
+    clip_type: str  # "media" | "fx_layer" | "adjustment_layer"
     name: str
     track_id: int
     timeline_in: int  # Starting frame on timeline (inclusive)
@@ -155,8 +251,14 @@ class TimelineClip:
     source_out: int = 0  # Ending frame in source file
     asset_id: str | None = None
     media_path: str | None = None
+    fx_type: str = "dlss5"  # "dlss5" | "reshade"
     dlss_params: DLSSConfig = field(default_factory=DLSSConfig)
+    reshade_params: ReShadeConfig = field(default_factory=ReShadeConfig)
     opacity: float = 1.0
+    scale_mode: str = "fit"  # "fit" | "fill" | "stretch"
+    asset_fps: float = 30.0
+    asset_width: int = 1920
+    asset_height: int = 1080
     color: str = "#2563eb"
 
     @property
@@ -171,10 +273,12 @@ class TimelineClip:
         timeline_in: int,
         source_in: int = 0,
         source_duration: int | None = None,
+        timeline_fps: float = 30.0,
     ) -> TimelineClip:
-        duration = source_duration or asset.duration_frames
-        timeline_out = timeline_in + duration
-        source_out = source_in + duration
+        # Calculate duration in timeline frame units conforming to timeline sequence fps
+        timeline_duration = source_duration if source_duration is not None else int(round(asset.duration_sec * timeline_fps))
+        timeline_out = timeline_in + max(1, timeline_duration)
+        source_out = source_in + asset.duration_frames
         return cls(
             clip_id=str(uuid.uuid4()),
             clip_type="media",
@@ -186,24 +290,38 @@ class TimelineClip:
             source_out=source_out,
             asset_id=asset.asset_id,
             media_path=asset.file_path,
+            fx_type="none",
             dlss_params=DLSSConfig(enabled=False),
+            reshade_params=ReShadeConfig(enabled=False),
             opacity=1.0,
+            scale_mode="fit",
+            asset_fps=asset.fps,
+            asset_width=asset.width,
+            asset_height=asset.height,
             color="#2563eb",
         )
 
     @classmethod
-    def create_adjustment_layer(
+    def create_fx_layer(
         cls,
         track_id: int,
         timeline_in: int,
         duration_frames: int = 150,  # 5 seconds at 30 fps
-        name: str = "DLSS 5 Adjustment Layer",
+        fx_type: str = "dlss5",
+        name: str | None = None,
     ) -> TimelineClip:
         timeline_out = timeline_in + max(1, duration_frames)
+        if fx_type == "reshade":
+            layer_name = name or "ReShade FX Layer"
+            color = "#0ea5e9"  # Cyan for ReShade
+        else:
+            layer_name = name or "DLSS 5 Neural Layer"
+            color = "#9333ea"  # Purple for DLSS 5
+
         return cls(
             clip_id=str(uuid.uuid4()),
-            clip_type="adjustment_layer",
-            name=name,
+            clip_type="fx_layer",
+            name=layer_name,
             track_id=track_id,
             timeline_in=timeline_in,
             timeline_out=timeline_out,
@@ -211,19 +329,40 @@ class TimelineClip:
             source_out=max(1, duration_frames),
             asset_id=None,
             media_path=None,
+            fx_type=fx_type,
             dlss_params=DLSSConfig(enabled=True),
+            reshade_params=ReShadeConfig(enabled=True),
             opacity=1.0,
-            color="#9333ea",  # Distinctive purple/amber for adjustment layer
+            color=color,
         )
+
+    @classmethod
+    def create_adjustment_layer(
+        cls,
+        track_id: int,
+        timeline_in: int,
+        duration_frames: int = 150,
+        name: str = "DLSS 5 Adjustment Layer",
+    ) -> TimelineClip:
+        """Backwards compatibility alias for DLSS 5 FX layer."""
+        clip = cls.create_fx_layer(
+            track_id=track_id,
+            timeline_in=timeline_in,
+            duration_frames=duration_frames,
+            fx_type="dlss5",
+            name=name,
+        )
+        clip.clip_type = "adjustment_layer"
+        return clip
 
 
 @dataclass
 class TimelineTrack:
-    """A single timeline track (V1, V2, A1, etc.) hosting clips."""
+    """A single timeline track (V1, V2, etc.) hosting clips."""
 
     track_id: int
     name: str
-    track_type: str = "video"  # "video" | "audio"
+    track_type: str = "video"  # "video"
     is_muted: bool = False
     is_locked: bool = False
     clips: list[TimelineClip] = field(default_factory=list)
@@ -247,12 +386,13 @@ class TimelineTrack:
 
 @dataclass
 class TimelineProject:
-    """Top-level project representing the complete timeline state."""
+    """Top-level project representing the complete timeline state and sequence."""
 
-    name: str = "DLSS 5 Project"
+    name: str = "Sequence 01"
     fps: float = 30.0
     width: int = 1920
     height: int = 1080
+    sequence: SequenceSettings = field(default_factory=SequenceSettings)
     video_tracks: list[TimelineTrack] = field(default_factory=list)
     audio_tracks: list[TimelineTrack] = field(default_factory=list)
     work_area_in: int = 0
@@ -260,9 +400,16 @@ class TimelineProject:
     playhead_frame: int = 0
 
     @classmethod
-    def create_default(cls, fps: float = 30.0, width: int = 1920, height: int = 1080) -> TimelineProject:
-        proj = cls(fps=fps, width=width, height=height)
-        # Default tracks: V3, V2, V1 (Audio tracks removed as requested)
+    def create_default(
+        cls,
+        fps: float = 30.0,
+        width: int = 1920,
+        height: int = 1080,
+        sequence_name: str = "Sequence 01",
+    ) -> TimelineProject:
+        seq = SequenceSettings(name=sequence_name, width=width, height=height, fps=fps)
+        proj = cls(name=sequence_name, fps=fps, width=width, height=height, sequence=seq)
+        # Default tracks: V3, V2, V1
         proj.video_tracks = [
             TimelineTrack(track_id=3, name="V3", track_type="video"),
             TimelineTrack(track_id=2, name="V2", track_type="video"),
@@ -270,6 +417,14 @@ class TimelineProject:
         ]
         proj.audio_tracks = []
         return proj
+
+    def update_sequence(self, settings: SequenceSettings) -> None:
+        """Update active sequence configuration (resolution, framerate, name)."""
+        self.sequence = settings
+        self.name = settings.name
+        self.fps = settings.fps
+        self.width = settings.width
+        self.height = settings.height
 
     def add_video_track(self, name: str | None = None) -> TimelineTrack:
         """Add a new video track on top of the timeline."""
@@ -314,7 +469,6 @@ class TimelineProject:
     def get_active_video_clips_at(self, frame: int) -> list[tuple[TimelineTrack, TimelineClip]]:
         """Return all active video clips at the given frame sorted from bottom (V1) to top."""
         active = []
-        # Sort video tracks by track_id ascending (V1 -> V2 -> V3)
         sorted_tracks = sorted(self.video_tracks, key=lambda t: t.track_id)
         for track in sorted_tracks:
             if track.is_muted:
@@ -354,8 +508,14 @@ class TimelineProject:
             source_out=original_source_out,
             asset_id=clip.asset_id,
             media_path=clip.media_path,
+            fx_type=clip.fx_type,
             dlss_params=DLSSConfig.from_dict(clip.dlss_params.to_dict()),
+            reshade_params=ReShadeConfig.from_dict(clip.reshade_params.to_dict()),
             opacity=clip.opacity,
+            scale_mode=clip.scale_mode,
+            asset_fps=clip.asset_fps,
+            asset_width=clip.asset_width,
+            asset_height=clip.asset_height,
             color=clip.color,
         )
         track.add_clip(clip2)

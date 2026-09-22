@@ -160,11 +160,15 @@ class MultiTrackCanvas(QWidget):
         painter.save()
 
         # Background gradient based on clip type
-        if clip.clip_type == "adjustment_layer":
-            # Distinctive vibrant Purple/Amber gradient for DLSS 5 Adjustment Layer
+        if clip.clip_type in ("adjustment_layer", "fx_layer"):
+            fx_type = getattr(clip, "fx_type", "dlss5")
             grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-            grad.setColorAt(0.0, QColor("#9333ea"))
-            grad.setColorAt(1.0, QColor("#6b21a8"))
+            if fx_type == "reshade":
+                grad.setColorAt(0.0, QColor("#0284c7"))
+                grad.setColorAt(1.0, QColor("#0369a1"))
+            else:
+                grad.setColorAt(0.0, QColor("#9333ea"))
+                grad.setColorAt(1.0, QColor("#6b21a8"))
         elif clip.color == "#2563eb":
             # Professional Blue/Cyan for media video clips
             grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
@@ -191,10 +195,15 @@ class MultiTrackCanvas(QWidget):
         font.setBold(True)
         painter.setFont(font)
 
-        if clip.clip_type == "adjustment_layer":
-            badge = f"DLSS 5 FX [{clip.dlss_params.preset}]"
+        if clip.clip_type in ("adjustment_layer", "fx_layer"):
+            fx_type = getattr(clip, "fx_type", "dlss5")
+            if fx_type == "reshade":
+                badge = f"ReShade FX [{clip.reshade_params.lut_name}]"
+                sub_info = f"Exp: {clip.reshade_params.exposure:+.1f} | CAS: {int(clip.reshade_params.cas_sharpness*100)}%"
+            else:
+                badge = f"DLSS 5 FX [{clip.dlss_params.nr_style}]"
+                sub_info = f"Scale: {int(clip.dlss_params.scale*100)}% | Int: {clip.dlss_params.nr_intensity:.2f}"
             painter.drawText(rect.adjusted(6, 4, -6, -4), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, badge)
-            sub_info = f"Scale: {clip.dlss_params.scale_factor:.1f}x | Sharp: {int(clip.dlss_params.sharpness)}%"
             font_sub = QFont("Segoe UI", 7)
             painter.setFont(font_sub)
             painter.drawText(rect.adjusted(6, 18, -6, -4), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, sub_info)
@@ -452,11 +461,13 @@ class MultiTrackCanvas(QWidget):
         drop_frame = self.x_to_frame(drop_x)
         item_type = payload.get("type")
 
-        if item_type == "adjustment_layer":
-            clip = TimelineClip.create_adjustment_layer(
+        if item_type in ("adjustment_layer", "fx_layer"):
+            fx_type = payload.get("fx_type", "dlss5")
+            clip = TimelineClip.create_fx_layer(
                 track_id=target_track.track_id,
                 timeline_in=drop_frame,
-                duration_frames=150,  # 5 seconds
+                duration_frames=int(round(5.0 * self.project.fps)),
+                fx_type=fx_type,
             )
             target_track.add_clip(clip)
             self.selected_clip_id = clip.clip_id
