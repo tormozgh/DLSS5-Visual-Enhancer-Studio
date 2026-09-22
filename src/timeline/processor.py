@@ -31,6 +31,9 @@ class DLSS5TimelineProcessor:
         self._settings = ReShadeSettings()
         self._active_session: DLSSFrameSession | None = None
         self._session_lock = threading.Lock()
+        self._session_input_size: tuple[int, int] | None = None
+        self._cached_gpu: dict | None = None
+        self._cached_runtime_bundle: dict | None = None
         self._frame_index: int = 0
         self._last_timeline_frame: int | None = None
         self._use_native_bridge: bool = True
@@ -42,6 +45,7 @@ class DLSS5TimelineProcessor:
                 with contextlib.suppress(Exception):
                     self._active_session.close()
                 self._active_session = None
+            self._session_input_size = None
 
     def process_frame(
         self,
@@ -131,16 +135,17 @@ class DLSS5TimelineProcessor:
         sess_out_w, sess_out_h = resolve_output_size(w, h, options.upscaling_factor)
         native = resolve_native_settings(options)
 
-        prepared = prepare_runtime()
-        gpu = resolve_runtime_ai_gpu(prepared.gpus, prepared.runtime_bundle, options.ai_gpu_uuid)
-
         with self._session_lock:
+            if self._cached_gpu is None or self._cached_runtime_bundle is None:
+                prepared = prepare_runtime()
+                self._cached_gpu = resolve_runtime_ai_gpu(prepared.gpus, prepared.runtime_bundle, options.ai_gpu_uuid)
+                self._cached_runtime_bundle = prepared.runtime_bundle
+
             session = self._active_session
             needs_new_session = (
                 session is None
                 or session.closed
-                or session.input_width != w
-                or session.input_height != h
+                or self._session_input_size != (w, h)
                 or session.output_width != sess_out_w
                 or session.output_height != sess_out_h
                 or session.factor != factor
@@ -164,11 +169,12 @@ class DLSS5TimelineProcessor:
                     mode=mode,
                     native_settings=native,
                     composition_mask=options.nr_mask,
-                    gpu=gpu,
-                    runtime_bundle=prepared.runtime_bundle,
+                    gpu=self._cached_gpu,
+                    runtime_bundle=self._cached_runtime_bundle,
                     controller=controller,
                 )
                 self._active_session = session
+                self._session_input_size = (w, h)
                 self._frame_index = 0
             else:
                 session.native_settings.update(native)

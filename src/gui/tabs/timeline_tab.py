@@ -355,26 +355,27 @@ class TimelineStudioTab(QWidget):
         splash_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         card = QFrame()
-        card.setFixedSize(540, 320)
+        card.setObjectName("splashCard")
+        card.setFixedSize(560, 280)
         card.setStyleSheet(
-            "QFrame {"
+            "QFrame#splashCard {"
             "  background-color: #16181f;"
             "  border: 1px solid #2d313b;"
             "  border-radius: 12px;"
-            "  padding: 24px;"
             "}"
         )
         card_layout = QVBoxLayout(card)
-        card_layout.setSpacing(14)
+        card_layout.setContentsMargins(36, 30, 36, 30)
+        card_layout.setSpacing(12)
         card_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         lbl_icon = QLabel("Timeline Studio")
-        lbl_icon.setStyleSheet("color: #38bdf8; font-size: 20px; font-weight: 800;")
+        lbl_icon.setStyleSheet("color: #38bdf8; font-size: 20px; font-weight: 800; background: transparent; border: none; padding: 0;")
         lbl_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         card_layout.addWidget(lbl_icon)
 
         lbl_title = QLabel("No Active Sequence")
-        lbl_title.setStyleSheet("color: #f8fafc; font-size: 15px; font-weight: 700;")
+        lbl_title.setStyleSheet("color: #f8fafc; font-size: 15px; font-weight: 700; background: transparent; border: none; padding: 0;")
         lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         card_layout.addWidget(lbl_title)
 
@@ -382,12 +383,12 @@ class TimelineStudioTab(QWidget):
             "Before placing media clips or applying DLSS 5 and ReShade FX layers,\n"
             "please create a sequence to define your resolution, aspect ratio, and frame rate."
         )
-        lbl_desc.setStyleSheet("color: #94a3b8; font-size: 12px; line-height: 1.4;")
+        lbl_desc.setStyleSheet("color: #94a3b8; font-size: 12px; background: transparent; border: none; padding: 0;")
         lbl_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_desc.setWordWrap(True)
         card_layout.addWidget(lbl_desc)
 
-        card_layout.addSpacing(10)
+        card_layout.addSpacing(8)
 
         btn_create = QPushButton("Create Sequence to Begin Editing")
         btn_create.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -396,9 +397,10 @@ class TimelineStudioTab(QWidget):
             "  background: #2563eb;"
             "  color: white;"
             "  border-radius: 6px;"
-            "  padding: 10px 22px;"
+            "  padding: 10px 24px;"
             "  font-size: 13px;"
             "  font-weight: 700;"
+            "  border: none;"
             "}"
             "QPushButton:hover { background: #1d4ed8; }"
         )

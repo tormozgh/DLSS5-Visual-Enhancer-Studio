@@ -9,6 +9,7 @@ import time
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from ..core.paths import FFMPEG
 from .compositor import TimelineCompositor
 
 
@@ -55,14 +56,13 @@ class TimelineExportWorker(QThread):
             self.failedExport.emit("Invalid frame range specified.")
             return
 
-        ffmpeg_exe = shutil.which("ffmpeg") or "ffmpeg"
+        ffmpeg_exe = str(FFMPEG) if FFMPEG.is_file() else (shutil.which("ffmpeg") or "ffmpeg")
 
         # Determine video encoder and fallback
         vcodec = self.codec
-        # Test if nvenc requested
-        extra_args = []
+        extra_args: list[str] = []
         if "nvenc" in vcodec:
-            extra_args = ["-preset", "p6", "-tune", "hq", "-rc", "vbr", "-b:v", f"{self.bitrate_mbps}M"]
+            extra_args = ["-preset", "p5", "-tune", "hq", "-rc", "vbr", "-b:v", f"{self.bitrate_mbps}M"]
         elif "prores" in vcodec:
             vcodec = "prores_ks"
             extra_args = ["-profile:v", "3", "-vendor", "apl0", "-bits_per_mb", "8000"]
@@ -92,7 +92,7 @@ class TimelineExportWorker(QThread):
             proc = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 bufsize=10**7,
             )
@@ -104,10 +104,13 @@ class TimelineExportWorker(QThread):
             for frame_idx in range(self.start_frame, self.end_frame):
                 if self._cancelled:
                     if proc and proc.stdin:
-                        proc.stdin.close()
+                        with contextlib_suppress():
+                            proc.stdin.close()
                     proc.kill()
+                    proc.communicate()
                     if os.path.exists(temp_video):
-                        os.remove(temp_video)
+                        with contextlib_suppress():
+                            os.remove(temp_video)
                     self.failedExport.emit("Export cancelled by user.")
                     return
 
@@ -142,10 +145,18 @@ class TimelineExportWorker(QThread):
                     last_stats_time = now
 
             if proc and proc.stdin:
-                proc.stdin.close()
-            proc.wait()
+                try:
+                    proc.stdin.close()
+                except Exception:
+                    pass
 
-            # Move temp video to final output path or mux audio if present
+            # Drain pipe completely to prevent OS pipe deadlock
+            _, stderr_data = proc.communicate()
+            if proc.returncode != 0:
+                err_text = stderr_data.decode("utf-8", errors="replace")[-500:] if stderr_data else "Unknown error"
+                raise RuntimeError(f"FFmpeg encoding failed with code {proc.returncode}:\n{err_text}")
+
+            # Move temp video to final output path
             if os.path.exists(self.output_path):
                 try:
                     os.remove(self.output_path)
@@ -160,6 +171,7 @@ class TimelineExportWorker(QThread):
             if proc:
                 try:
                     proc.kill()
+                    proc.communicate()
                 except Exception:
                     pass
             if os.path.exists(temp_video):
@@ -168,3 +180,11 @@ class TimelineExportWorker(QThread):
                 except Exception:
                     pass
             self.failedExport.emit(f"Export failed: {exc}")
+
+
+class contextlib_suppress:
+    """Helper context manager suppressing exceptions."""
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return True

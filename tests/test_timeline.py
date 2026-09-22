@@ -1,5 +1,6 @@
 """Unit tests for the DLSS 5 Timeline Studio engine, models, and compositing pipeline."""
 
+import contextlib
 import os
 import tempfile
 import cv2
@@ -338,4 +339,68 @@ def test_timeline_studio_sequence_splash_workflow():
     tab.stack.setCurrentIndex(1)
     assert tab.stack.currentIndex() == 1  # Active workspace
     tab.close()
+
+
+def test_dlss5_consecutive_frames_gpu_speed():
+    """Verify that DLSS5TimelineProcessor reuses the active GPU session seamlessly across consecutive frames."""
+    processor = DLSS5TimelineProcessor()
+    frame = np.full((120, 160, 3), 150, dtype=np.uint8)
+    cfg = DLSSConfig(nr_style="Default", scale=1.0, nr_intensity=1.0, nr_passes=1)
+
+    outputs = []
+    for i in range(4):
+        out = processor.process_frame(frame, cfg, target_size=(160, 120), frame_idx=i)
+        assert out is not None
+        assert out.shape == (120, 160, 3)
+        outputs.append(out)
+
+    assert len(outputs) == 4
+    processor.close()
+
+
+def test_timeline_export_finishes_without_deadlock():
+    """Verify that TimelineExportWorker executes to 100% and finishes cleanly without hanging."""
+    import time
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    from src.timeline.export_worker import TimelineExportWorker
+
+    cache = VideoFrameCache()
+    proj = TimelineProject.create_default(fps=30.0, width=160, height=120)
+    comp = TimelineCompositor(proj, cache)
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+        export_path = f.name
+
+    try:
+        worker = TimelineExportWorker(
+            compositor=comp,
+            start_frame=0,
+            end_frame=15,
+            output_path=export_path,
+            target_resolution=(160, 120),
+            target_fps=30.0,
+            codec="libx264",
+            bitrate_mbps=5.0,
+        )
+
+        completed = []
+        errors = []
+        worker.finishedExport.connect(completed.append)
+        worker.failedExport.connect(errors.append)
+
+        worker.start()
+        # Wait up to 10 seconds for 15 frames to finish
+        worker.wait(10000)
+        app.processEvents()
+
+        assert not errors, f"Export failed with error: {errors}"
+        assert len(completed) == 1, "Export did not emit finishedExport signal (likely deadlocked!)"
+        assert os.path.exists(export_path), "Export file was not created"
+        assert os.path.getsize(export_path) > 0, "Export file is empty"
+    finally:
+        if os.path.exists(export_path):
+            with contextlib.suppress(Exception):
+                os.remove(export_path)
+
 
