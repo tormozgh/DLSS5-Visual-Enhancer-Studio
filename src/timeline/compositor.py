@@ -116,7 +116,7 @@ class TimelineCompositor:
                 )
             elif (fx_type == "dlss5" or clip.clip_type == "adjustment_layer") and clip.dlss_params.enabled:
                 enhanced = self.processor.process_frame(
-                    canvas, clip.dlss_params, (width, height), is_export
+                    canvas, clip.dlss_params, (width, height), is_export, frame_idx=frame_idx
                 )
 
             if enhanced is not None:

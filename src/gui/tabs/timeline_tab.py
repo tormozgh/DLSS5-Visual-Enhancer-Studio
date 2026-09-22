@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Callable
 
-from PyQt6.QtCore import QPoint, Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QSlider,
     QSpinBox,
     QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -332,6 +333,7 @@ class TimelineStudioTab(QWidget):
         self.settings = settings
 
         # Core State
+        self._sequence_initialized: bool = False
         self.project = TimelineProject.create_default(fps=30.0, width=1920, height=1080, sequence_name="Sequence 01")
         self.frame_cache = VideoFrameCache()
         self.compositor = TimelineCompositor(self.project, self.frame_cache)
@@ -345,7 +347,68 @@ class TimelineStudioTab(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # ---------------- TOP WORKSPACE SECTION ----------------
+        self.stack = QStackedWidget(self)
+
+        # ---------------- PAGE 0: SPLASH / NO SEQUENCE PROMPT ----------------
+        self.splash_page = QWidget()
+        splash_layout = QVBoxLayout(self.splash_page)
+        splash_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        card = QFrame()
+        card.setFixedSize(540, 320)
+        card.setStyleSheet(
+            "QFrame {"
+            "  background-color: #16181f;"
+            "  border: 1px solid #2d313b;"
+            "  border-radius: 12px;"
+            "  padding: 24px;"
+            "}"
+        )
+        card_layout = QVBoxLayout(card)
+        card_layout.setSpacing(14)
+        card_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        lbl_icon = QLabel("Timeline Studio")
+        lbl_icon.setStyleSheet("color: #38bdf8; font-size: 20px; font-weight: 800;")
+        lbl_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card_layout.addWidget(lbl_icon)
+
+        lbl_title = QLabel("No Active Sequence")
+        lbl_title.setStyleSheet("color: #f8fafc; font-size: 15px; font-weight: 700;")
+        lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card_layout.addWidget(lbl_title)
+
+        lbl_desc = QLabel(
+            "Before placing media clips or applying DLSS 5 and ReShade FX layers,\n"
+            "please create a sequence to define your resolution, aspect ratio, and frame rate."
+        )
+        lbl_desc.setStyleSheet("color: #94a3b8; font-size: 12px; line-height: 1.4;")
+        lbl_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_desc.setWordWrap(True)
+        card_layout.addWidget(lbl_desc)
+
+        card_layout.addSpacing(10)
+
+        btn_create = QPushButton("Create Sequence to Begin Editing")
+        btn_create.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_create.setStyleSheet(
+            "QPushButton {"
+            "  background: #2563eb;"
+            "  color: white;"
+            "  border-radius: 6px;"
+            "  padding: 10px 22px;"
+            "  font-size: 13px;"
+            "  font-weight: 700;"
+            "}"
+            "QPushButton:hover { background: #1d4ed8; }"
+        )
+        btn_create.clicked.connect(self.prompt_initial_sequence)
+        card_layout.addWidget(btn_create, 0, Qt.AlignmentFlag.AlignCenter)
+
+        splash_layout.addWidget(card)
+        self.stack.addWidget(self.splash_page)
+
+        # ---------------- PAGE 1: WORKSPACE ----------------
         vert_splitter = QSplitter(Qt.Orientation.Vertical)
         vert_splitter.setHandleWidth(4)
 
@@ -502,10 +565,45 @@ class TimelineStudioTab(QWidget):
         vert_splitter.addWidget(bottom_container)
         vert_splitter.setSizes([460, 360])
 
-        main_layout.addWidget(vert_splitter)
+        self.stack.addWidget(vert_splitter)
+        self.stack.setCurrentIndex(0)
+        main_layout.addWidget(self.stack)
 
         # Render initial empty frame
         self.seek_frame(0)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not self._sequence_initialized:
+            QTimer.singleShot(50, self.prompt_initial_sequence)
+
+    def prompt_initial_sequence(self) -> None:
+        """Prompt user with the New Sequence setup dialog before activating the timeline workspace."""
+        diag = SequenceSettingsDialog(None, is_new=True, parent=self)
+        if diag.exec() == QDialog.DialogCode.Accepted:
+            new_seq = diag.get_settings()
+            self.project = TimelineProject.create_default(
+                fps=new_seq.fps,
+                width=new_seq.width,
+                height=new_seq.height,
+                sequence_name=new_seq.name,
+            )
+            self.compositor.project = self.project
+            self.canvas.project = self.project
+            self.canvas.selected_clip_id = None
+            self.inspector.inspect_clip(None)
+            self._sequence_initialized = True
+            self.stack.setCurrentIndex(1)
+            self._apply_sequence_update()
+            self.statusMessage.emit(f"Created sequence: {new_seq.name} [{new_seq.width}x{new_seq.height} @ {new_seq.fps:.2f} fps]", False)
+        else:
+            self._sequence_initialized = False
+            self.stack.setCurrentIndex(0)
+
+    def closeEvent(self, event) -> None:
+        if hasattr(self, "compositor") and hasattr(self.compositor, "processor"):
+            self.compositor.processor.close()
+        super().closeEvent(event)
 
     def open_sequence_settings(self) -> None:
         """Open settings dialog to adjust the current sequence resolution, framerate, and name."""
@@ -531,6 +629,8 @@ class TimelineStudioTab(QWidget):
             self.canvas.project = self.project
             self.canvas.selected_clip_id = None
             self.inspector.inspect_clip(None)
+            self._sequence_initialized = True
+            self.stack.setCurrentIndex(1)
             self._apply_sequence_update()
             self.statusMessage.emit(f"Created new sequence: {new_seq.name}", False)
 

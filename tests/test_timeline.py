@@ -287,3 +287,55 @@ def test_original_preview_non_black_without_fx_layer():
         if os.path.exists(img_path):
             os.remove(img_path)
 
+
+def test_dlss5_processor_no_lut_color_distortion():
+    """Verify that DLSS 5 layer preserves color neutrality and does not apply ReShade LUT."""
+    processor = DLSS5TimelineProcessor()
+    # Neutral gray image
+    neutral_frame = np.full((120, 160, 3), 128, dtype=np.uint8)
+    cfg = DLSSConfig(
+        nr_style="Default",
+        scale=1.0,
+        nr_intensity=1.0,
+        nr_passes=1,
+        local_tone_strength=1.0,
+        local_structure_strength=1.0,
+        skin_structure_strength=0.0,
+        nr_color_strength=1.0,
+        tone_preservation=0.0,
+    )
+
+    out = processor.process_frame(neutral_frame, cfg, target_size=(160, 120), frame_idx=0)
+    assert out is not None
+    assert out.shape == (120, 160, 3)
+
+    # Neutral input should remain color neutral (B, G, R differences should be minimal, unlike a Teal/Orange LUT)
+    b, g, r = out[60, 80]
+    diff = max(abs(int(b) - int(g)), abs(int(g) - int(r)), abs(int(b) - int(r)))
+    assert diff < 15, f"DLSS 5 layer must not apply color grading LUT! Color difference was {diff}"
+    processor.close()
+
+
+def test_timeline_studio_sequence_splash_workflow():
+    """Verify that TimelineStudioTab starts on the initial sequence splash page."""
+    from PyQt6.QtWidgets import QApplication
+    from src.settings.models import UISettings
+    from src.gui.tabs.timeline_tab import TimelineStudioTab
+
+    app = QApplication.instance() or QApplication([])
+    tab = TimelineStudioTab(UISettings())
+
+    # Initially before creating sequence:
+    assert tab._sequence_initialized is False
+    assert tab.stack.currentIndex() == 0  # Splash page
+
+    # Verify splash page UI elements exist
+    assert hasattr(tab, "splash_page")
+    assert tab.splash_page is not None
+
+    # Simulate sequence creation
+    tab._sequence_initialized = True
+    tab.stack.setCurrentIndex(1)
+    assert tab.stack.currentIndex() == 1  # Active workspace
+    tab.close()
+
