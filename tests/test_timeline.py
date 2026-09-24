@@ -404,3 +404,77 @@ def test_timeline_export_finishes_without_deadlock():
                 os.remove(export_path)
 
 
+def test_settings_get_output_dir():
+    """Verify that UISettings.get_output_dir() resolves correctly without NameError."""
+    from dataclasses import replace
+    from src.settings.models import UISettings
+    from src.core.paths import OUTPUTS
+    from pathlib import Path
+
+    s = UISettings()
+    assert s.get_output_dir() == OUTPUTS
+    assert isinstance(s.get_output_dir(), Path)
+
+    # Custom output dir
+    with tempfile.TemporaryDirectory() as td:
+        s2 = replace(s, custom_output_dir=td)
+        assert s2.get_output_dir() == Path(td)
+
+
+def test_draggable_media_list_widget_and_drag_creation():
+    """Verify DraggableMediaListWidget mouse events instantiate QMimeData properly without crashing."""
+    import json
+    from PyQt6.QtCore import QPoint, QPointF, Qt
+    from PyQt6.QtGui import QMouseEvent, QIcon, QPixmap
+    from PyQt6.QtWidgets import QApplication
+    from src.gui.components.timeline.media_pool import DraggableMediaListWidget, MediaAssetListItem
+
+    app = QApplication.instance() or QApplication([])
+
+    widget = DraggableMediaListWidget()
+    asset = MediaAsset.create(
+        file_path="test_drag.mp4",
+        duration_frames=60,
+        duration_sec=2.0,
+        fps=30.0,
+        width=1920,
+        height=1080,
+    )
+    item = MediaAssetListItem(asset, is_adjustment_layer=False)
+    pix = QPixmap(48, 30)
+    pix.fill(Qt.GlobalColor.blue)
+    item.setIcon(QIcon(pix))
+    widget.addItem(item)
+    widget.setCurrentItem(item)
+
+    # Press event
+    press_event = QMouseEvent(
+        QMouseEvent.Type.MouseButtonPress,
+        QPointF(10.0, 10.0),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    widget.mousePressEvent(press_event)
+    assert widget._drag_start_pos == QPoint(10, 10)
+
+    # Release event resets drag pos
+    release_event = QMouseEvent(
+        QMouseEvent.Type.MouseButtonRelease,
+        QPointF(10.0, 10.0),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    widget.mouseReleaseEvent(release_event)
+    assert widget._drag_start_pos.isNull()
+
+
+def test_core_ffmpeg_preview_probe_import():
+    """Verify that probe_video is properly imported and callable in preview module."""
+    from src.core.ffmpeg.preview import is_browser_playable, probe_video
+    assert callable(probe_video)
+    # Testing a non-existent file should safely return False without exception
+    assert is_browser_playable("non_existent_file.mp4") is False
+
+

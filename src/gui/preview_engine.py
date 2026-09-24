@@ -8,6 +8,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -250,7 +251,6 @@ class PreviewWorker(QObject):
                         continue
                     except Exception as bridge_exc:
                         self._close_session()
-                        import traceback
                         print(f"DLSS 5 Native execution error: {bridge_exc}")
                         traceback.print_exc()
 

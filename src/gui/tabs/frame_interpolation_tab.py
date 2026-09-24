@@ -395,9 +395,15 @@ class FrameInterpolationTab(QWidget):
 
         clicked = msg_box.clickedButton()
         if clicked == btn_open:
-            os.startfile(out_path)
+            try:
+                os.startfile(out_path)
+            except Exception:
+                pass
         elif clicked == btn_folder:
-            os.startfile(str(p.parent))
+            try:
+                os.startfile(str(p.parent))
+            except Exception:
+                pass
 
     def _on_failed(self, error: str) -> None:
         self._reset_ui_state()

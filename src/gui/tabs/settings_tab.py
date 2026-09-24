@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
+from pathlib import Path
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
+    QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -24,6 +29,7 @@ from ...settings.models import (
     QUALITY_CHOICES,
     UISettings,
 )
+from ...settings.presets import import_settings_preset, preset_document
 from ...settings.storage import load_settings, save_settings
 
 
@@ -196,8 +202,6 @@ class SettingsTab(QWidget):
         main_layout.addWidget(scroll_area)
 
     def _on_browse_output_dir(self) -> None:
-        from PyQt6.QtWidgets import QFileDialog
-        from pathlib import Path
         current = self.txt_output_dir.text().strip() or str(OUTPUTS)
         chosen = QFileDialog.getExistingDirectory(self, "Choose Output Directory", current)
         if chosen:
@@ -223,9 +227,6 @@ class SettingsTab(QWidget):
 
     def _save_settings(self) -> None:
         try:
-            from dataclasses import replace
-            from pathlib import Path
-
             custom_out = self.txt_output_dir.text().strip()
             if custom_out:
                 p = Path(custom_out)
@@ -260,11 +261,6 @@ class SettingsTab(QWidget):
 
     def _export_profile(self) -> None:
         try:
-            import json
-            from pathlib import Path
-            from PyQt6.QtWidgets import QFileDialog
-            from ...settings.presets import preset_document
-
             presets_dir = Path("presets")
             presets_dir.mkdir(parents=True, exist_ok=True)
             file_path, _ = QFileDialog.getSaveFileName(
@@ -288,10 +284,6 @@ class SettingsTab(QWidget):
 
     def _import_profile(self) -> None:
         try:
-            from pathlib import Path
-            from PyQt6.QtWidgets import QFileDialog
-            from ...settings.presets import import_settings_preset
-
             presets_dir = Path("presets")
             presets_dir.mkdir(parents=True, exist_ok=True)
             file_path, _ = QFileDialog.getOpenFileName(

@@ -626,7 +626,10 @@ class RealtimeUpscaleTab(QWidget):
     def _on_open_recordings_folder(self) -> None:
         folder = Path(self.line_rec_dir.text().strip()) if self.line_rec_dir.text().strip() else OUTPUTS
         folder.mkdir(parents=True, exist_ok=True)
-        os.startfile(str(folder))
+        try:
+            os.startfile(str(folder))
+        except Exception:
+            pass
 
     def _on_toggle_record(self) -> None:
         if self._pipeline.recorder.is_recording:

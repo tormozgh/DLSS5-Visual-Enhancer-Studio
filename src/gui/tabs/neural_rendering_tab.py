@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -843,11 +844,15 @@ class NeuralRenderingTab(QWidget):
 
         clicked = msg_box.clickedButton()
         if clicked == btn_open:
-            import os
-            os.startfile(out_path)
+            try:
+                os.startfile(out_path)
+            except Exception:
+                pass
         elif clicked == btn_folder:
-            import os
-            os.startfile(str(p.parent))
+            try:
+                os.startfile(str(p.parent))
+            except Exception:
+                pass
 
     def _on_video_failed(self, error: str) -> None:
         self._reset_video_ui()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -87,13 +88,15 @@ class TimelineExportWorker(QThread):
         ]
 
         proc = None
+        stderr_file = None
         try:
             self.progressChanged.emit(0, "Initializing video encoding pipeline...")
+            stderr_file = tempfile.TemporaryFile()
             proc = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
+                stderr=stderr_file,
                 bufsize=10**7,
             )
 
@@ -106,8 +109,10 @@ class TimelineExportWorker(QThread):
                     if proc and proc.stdin:
                         with contextlib_suppress():
                             proc.stdin.close()
-                    proc.kill()
-                    proc.communicate()
+                    if proc:
+                        proc.kill()
+                        with contextlib_suppress():
+                            proc.wait(timeout=2.0)
                     if os.path.exists(temp_video):
                         with contextlib_suppress():
                             os.remove(temp_video)
@@ -150,11 +155,19 @@ class TimelineExportWorker(QThread):
                 except Exception:
                     pass
 
-            # Drain pipe completely to prevent OS pipe deadlock
-            _, stderr_data = proc.communicate()
-            if proc.returncode != 0:
-                err_text = stderr_data.decode("utf-8", errors="replace")[-500:] if stderr_data else "Unknown error"
-                raise RuntimeError(f"FFmpeg encoding failed with code {proc.returncode}:\n{err_text}")
+            # Wait for FFmpeg to finish encoding and close container
+            if proc:
+                proc.wait()
+                if proc.returncode != 0:
+                    err_text = "Unknown error"
+                    if stderr_file:
+                        try:
+                            stderr_file.seek(0)
+                            stderr_bytes = stderr_file.read()
+                            err_text = stderr_bytes.decode("utf-8", errors="replace")[-500:]
+                        except Exception:
+                            pass
+                    raise RuntimeError(f"FFmpeg encoding failed with code {proc.returncode}:\n{err_text}")
 
             # Move temp video to final output path
             if os.path.exists(self.output_path):
@@ -171,7 +184,7 @@ class TimelineExportWorker(QThread):
             if proc:
                 try:
                     proc.kill()
-                    proc.communicate()
+                    proc.wait(timeout=2.0)
                 except Exception:
                     pass
             if os.path.exists(temp_video):
@@ -180,6 +193,12 @@ class TimelineExportWorker(QThread):
                 except Exception:
                     pass
             self.failedExport.emit(f"Export failed: {exc}")
+        finally:
+            if stderr_file:
+                try:
+                    stderr_file.close()
+                except Exception:
+                    pass
 
 
 class contextlib_suppress:

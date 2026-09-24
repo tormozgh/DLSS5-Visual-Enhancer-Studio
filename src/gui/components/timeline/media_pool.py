@@ -6,7 +6,7 @@ import json
 import os
 
 import cv2
-from PyQt6.QtCore import QByteArray, QPoint, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QByteArray, QMimeData, QPoint, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QDrag, QIcon, QImage, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -63,28 +63,48 @@ class DraggableMediaListWidget(QListWidget):
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_start_pos = event.position().toPoint()
+            try:
+                self._drag_start_pos = event.position().toPoint()
+            except AttributeError:
+                self._drag_start_pos = event.pos()
         super().mousePressEvent(event)
 
+    def mouseReleaseEvent(self, event) -> None:
+        self._drag_start_pos = QPoint()
+        super().mouseReleaseEvent(event)
+
     def mouseMoveEvent(self, event) -> None:
-        if event.buttons() & Qt.MouseButton.LeftButton:
-            dist = (event.position().toPoint() - self._drag_start_pos).manhattanLength()
+        if event.buttons() & Qt.MouseButton.LeftButton and not self._drag_start_pos.isNull():
+            try:
+                curr_pos = event.position().toPoint()
+            except AttributeError:
+                curr_pos = event.pos()
+
+            dist = (curr_pos - self._drag_start_pos).manhattanLength()
             if dist >= 4:
                 item = self.itemAt(self._drag_start_pos) or self.currentItem()
                 if isinstance(item, MediaAssetListItem):
-                    drag = QDrag(self)
-                    mime = QMimeData()
-                    if item.is_adjustment_layer:
-                        payload = {"type": "fx_layer", "fx_type": item.fx_type}
-                    elif item.asset:
-                        payload = {"type": "media", "asset_id": item.asset.asset_id}
-                    else:
-                        payload = {}
-                    mime.setData("application/x-dlss-timeline-asset", QByteArray(json.dumps(payload).encode("utf-8")))
-                    drag.setMimeData(mime)
-                    drag.setPixmap(item.icon().pixmap(48, 30))
-                    drag.exec(Qt.DropAction.CopyAction)
-                    return
+                    try:
+                        drag = QDrag(self)
+                        mime = QMimeData()
+                        if item.is_adjustment_layer:
+                            payload = {"type": "fx_layer", "fx_type": item.fx_type}
+                        elif item.asset:
+                            payload = {"type": "media", "asset_id": item.asset.asset_id}
+                        else:
+                            payload = {}
+                        mime.setData("application/x-dlss-timeline-asset", QByteArray(json.dumps(payload).encode("utf-8")))
+                        drag.setMimeData(mime)
+                        pix = item.icon().pixmap(48, 30)
+                        if not pix.isNull():
+                            drag.setPixmap(pix)
+                        self._drag_start_pos = QPoint()
+                        drag.exec(Qt.DropAction.CopyAction)
+                        return
+                    except Exception as exc:
+                        app_log.error(f"Error starting timeline drag: {exc}")
+                        self._drag_start_pos = QPoint()
+                        return
         super().mouseMoveEvent(event)
 
 
@@ -174,7 +194,7 @@ class MediaPoolWidget(QFrame):
         self.list_widget = DraggableMediaListWidget(self)
         self.list_widget.setIconSize(QSize(64, 40))
         self.list_widget.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.list_widget.setDragEnabled(True)
+        self.list_widget.setDragEnabled(False)
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
         layout.addWidget(self.list_widget)
 

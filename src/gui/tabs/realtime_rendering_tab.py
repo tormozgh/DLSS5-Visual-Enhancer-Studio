@@ -797,7 +797,10 @@ class RealtimeRenderingTab(QWidget):
         rec_dir_str = self.line_rec_dir.text().strip()
         folder = Path(rec_dir_str) if rec_dir_str else OUTPUTS
         folder.mkdir(parents=True, exist_ok=True)
-        os.startfile(str(folder))
+        try:
+            os.startfile(str(folder))
+        except Exception:
+            pass
 
     def _on_pipeline_frame_ready(self, original: np.ndarray, enhanced: np.ndarray) -> None:
         with self._frame_lock:

@@ -6,6 +6,7 @@ from pathlib import Path
 from .. import app_log
 from ..paths import FFMPEG
 from .codecs import _base_codec
+from .probe import probe_video
 
 PREVIEW_ENCODING_CHOICES = ("Auto", "Always H.264", "Disabled")
 DEFAULT_PREVIEW_ENCODING = "Auto"
